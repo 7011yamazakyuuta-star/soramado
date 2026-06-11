@@ -524,6 +524,38 @@ vec4 hazeLayer(vec3 ro, vec3 rd, vec3 skyAmbient, vec3 sunDir) {
   return vec4(light, a);
 }
 
+// ---------------------------------------------------------------- moon
+// Nearside albedo: the real maria placed by their selenographic
+// coordinates (orthographic projection, x = east, y = north), so the
+// familiar pattern — the "rabbit" — faces you. Libration and the
+// parallactic rotation are ignored (a few degrees at most).
+float mare(vec2 p, vec2 c, vec2 r, float depth) {
+  vec2 q = (p - c) / r;
+  return depth * smoothstep(1.0, 0.45, length(q));
+}
+
+float moonAlbedo(vec2 duv) {
+  float a = 1.04;
+  a -= mare(duv, vec2(-0.23, 0.54), vec2(0.33, 0.26), 0.55); // Imbrium
+  a -= mare(duv, vec2(0.27, 0.47), vec2(0.21, 0.18), 0.52);  // Serenitatis
+  a -= mare(duv, vec2(0.51, 0.14), vec2(0.24, 0.20), 0.52);  // Tranquillitatis
+  a -= mare(duv, vec2(0.82, 0.29), vec2(0.14, 0.11), 0.55);  // Crisium
+  a -= mare(duv, vec2(0.77, -0.14), vec2(0.15, 0.19), 0.45); // Fecunditatis
+  a -= mare(duv, vec2(0.55, -0.26), vec2(0.11, 0.10), 0.45); // Nectaris
+  a -= mare(duv, vec2(-0.27, -0.36), vec2(0.18, 0.15), 0.45); // Nubium
+  a -= mare(duv, vec2(-0.57, -0.41), vec2(0.12, 0.10), 0.45); // Humorum
+  a -= mare(duv, vec2(-0.72, 0.30), vec2(0.20, 0.34), 0.48); // Oceanus Procellarum N
+  a -= mare(duv, vec2(-0.52, -0.05), vec2(0.18, 0.22), 0.44); // Procellarum S
+  // Tycho: bright young crater with a faint broad ray system.
+  vec2 ty = (duv - vec2(-0.14, -0.68)) / 0.07;
+  a += 0.22 * exp(-dot(ty, ty));
+  vec2 tr = (duv - vec2(-0.14, -0.68)) / 0.45;
+  a += 0.06 * exp(-dot(tr, tr));
+  // Fine highland/crater grain.
+  a += 0.10 * (fbm3lo(vec3(duv * 5.0, 4.2)) - 0.5);
+  return clamp(a, 0.30, 1.25);
+}
+
 // ------------------------------------------------------------- tone map
 // Narkowicz ACES filmic approximation.
 vec3 acesToneMap(vec3 x) {
@@ -605,11 +637,15 @@ void main() {
         vec3 nW = mx * n.x + my * n.y - mz * n.z;
         float sunlit = max(dot(nW, sunDir), 0.0);
         float limb = 0.82 + 0.18 * n.z;
-        float mottle = 0.78 + 0.44 * (fbm3lo(nW * 5.2 + 2.7) - 0.5);
+        float albedo = moonAlbedo(duv);
         const float kMoonAlbedo = 0.12;
         const float kEarthshine = 0.013;
         vec3 Lm = uSunIrradiance * (kMoonAlbedo / PI) *
-                  (sunlit + kEarthshine) * limb * mottle;
+                  (sunlit + kEarthshine) * limb * albedo;
+        // Local adaptation: cap the moon's effective exposure (the eye and
+        // every camera do this) so the maria stay visible at night instead
+        // of clipping into a featureless white circle.
+        Lm *= min(1.0, 1.7 / max(uExposure, 1e-3));
         // Surface radiance through the air, plus the air-light in front:
         // by day the dark limb fades into the blue, exactly like reality.
         sky = mix(sky, Lm * viewTrans + atmos, edge);
