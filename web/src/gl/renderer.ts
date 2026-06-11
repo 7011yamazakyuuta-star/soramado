@@ -21,7 +21,13 @@ export interface RenderParams {
   lightSamples: number;
   sunDisc: boolean;
   clouds: boolean;
-  cloudCover: number;
+  /** Per-layer coverage 0..1: [low cumulus, mid sheet, high cirrus]. */
+  cloudCovers: [number, number, number];
+  /** Synoptic-noise amplitude (small when live weather drives coverage). */
+  synopticAmp: number;
+  /** 0..1, 1 = crystal clear (scales the haze veil). */
+  visibility: number;
+  contrail: { origin: [number, number]; dir: [number, number]; t: number; on: boolean };
   haze: boolean;
   stars: boolean;
   starMat: Float32Array; // 9 elements, column-major
@@ -94,6 +100,8 @@ export class SkyRenderer {
   private starProgram: ProgramInfo;
   private starVao: WebGLVertexArrayObject;
   private starCount: number;
+  /** True when rendering into a Display-P3 drawing buffer. */
+  wideGamut = false;
 
   constructor(private canvas: HTMLCanvasElement) {
     const gl = canvas.getContext('webgl2', {
@@ -105,6 +113,20 @@ export class SkyRenderer {
     });
     if (!gl) throw new Error('WebGL2 not supported');
     this.gl = gl;
+
+    // Wide-gamut output where the display can show it: the sky's spectral
+    // blues and sunset reds exceed sRGB, and Display-P3 clips far less.
+    try {
+      if (
+        'drawingBufferColorSpace' in gl &&
+        window.matchMedia('(color-gamut: p3)').matches
+      ) {
+        gl.drawingBufferColorSpace = 'display-p3';
+        this.wideGamut = true;
+      }
+    } catch {
+      /* sRGB output */
+    }
 
     this.programs.single = this.buildProgram(false);
 
@@ -265,7 +287,13 @@ export class SkyRenderer {
     gl.uniform1i(loc('uLightSamples'), p.lightSamples);
     gl.uniform1f(loc('uSunDiscOn'), p.sunDisc ? 1 : 0);
     gl.uniform1f(loc('uCloudsOn'), p.clouds ? 1 : 0);
-    gl.uniform1f(loc('uCloudCover'), p.cloudCover);
+    gl.uniform3f(loc('uCloudCovers'), ...p.cloudCovers);
+    gl.uniform1f(loc('uSynopticAmp'), p.synopticAmp);
+    gl.uniform1f(loc('uVisibility'), p.visibility);
+    gl.uniform2f(loc('uContrailOrigin'), ...p.contrail.origin);
+    gl.uniform2f(loc('uContrailDir'), ...p.contrail.dir);
+    gl.uniform1f(loc('uContrailT'), p.contrail.t);
+    gl.uniform1f(loc('uContrailOn'), p.contrail.on ? 1 : 0);
     gl.uniform1f(loc('uHazeOn'), p.haze ? 1 : 0);
     gl.uniform1f(loc('uStarsOn'), p.stars ? 1 : 0);
     gl.uniformMatrix3fv(loc('uStarMat'), false, p.starMat);

@@ -1,4 +1,4 @@
-import type { Settings, TimeMode, QualityMode, AzimuthMode } from '../settings';
+import type { Settings, TimeMode, QualityMode, AzimuthMode, CloudsMode } from '../settings';
 import { CITY_PRESETS } from '../sky/cities';
 
 export interface PanelHooks {
@@ -10,6 +10,8 @@ export interface PanelHooks {
   requestGeolocation(): Promise<string>;
   /** iOS needs a user-gesture permission for tilt parallax. */
   requestParallaxPermission(): void;
+  /** Share the current sky (place+instant+view); resolves to a status text. */
+  shareSky(): Promise<string>;
   toggleFullscreen(): void;
 }
 
@@ -95,20 +97,29 @@ export class Panel {
         <div class="divider"></div>
 
         <div class="row">
-          <label class="head">表示</label>
-          <label class="toggle"><input type="checkbox" data-el="sunDisc" />太陽ディスク</label>
-          <label class="toggle"><input type="checkbox" data-el="clouds" />雲</label>
-          <label class="toggle"><input type="checkbox" data-el="hazeOn" />霞</label>
-          <label class="toggle"><input type="checkbox" data-el="stars" />星空</label>
-          <label class="toggle"><input type="checkbox" data-el="moon" />月</label>
-          <label class="toggle"><input type="checkbox" data-el="aurora" />オーロラ</label>
-          <label class="toggle" data-el="parallaxRow"><input type="checkbox" data-el="parallax" />視差(傾き)</label>
+          <label class="head">雲</label>
+          <span class="seg" data-el="cloudSeg">
+            <button data-cm="off">なし</button>
+            <button data-cm="manual">手動</button>
+            <button data-cm="live">実況気象</button>
+          </span>
+          <label class="toggle" data-el="contrailRow"><input type="checkbox" data-el="contrails" />飛行機雲</label>
         </div>
 
         <div class="row" data-el="cloudRow">
           <label class="head">雲量</label>
           <input type="range" min="0" max="100" step="1" data-el="cloudCover" />
           <span class="value" data-el="cloudValue"></span>
+        </div>
+
+        <div class="row">
+          <label class="head">表示</label>
+          <label class="toggle"><input type="checkbox" data-el="sunDisc" />太陽ディスク</label>
+          <label class="toggle"><input type="checkbox" data-el="hazeOn" />霞</label>
+          <label class="toggle"><input type="checkbox" data-el="stars" />星空</label>
+          <label class="toggle"><input type="checkbox" data-el="moon" />月</label>
+          <label class="toggle"><input type="checkbox" data-el="aurora" />オーロラ</label>
+          <label class="toggle" data-el="parallaxRow"><input type="checkbox" data-el="parallax" />視差(傾き)</label>
         </div>
 
         <div class="row">
@@ -144,8 +155,23 @@ export class Panel {
         </div>
 
         <div class="row">
-          <label class="toggle"><input type="checkbox" data-el="wakeLock" />スリープ防止 (Wake Lock)</label>
+          <label class="head">目覚まし</label>
+          <label class="toggle"><input type="checkbox" data-el="wakeEnabled" />おはようモード</label>
+          <input type="time" data-el="wakeTime" />
         </div>
+
+        <div class="row">
+          <label class="head">サウンド</label>
+          <label class="toggle"><input type="checkbox" data-el="soundOn" />環境音</label>
+          <input type="range" min="0" max="100" step="1" data-el="soundVol" />
+        </div>
+
+        <div class="row">
+          <label class="toggle"><input type="checkbox" data-el="wakeLock" />スリープ防止 (Wake Lock)</label>
+          <label class="toggle"><input type="checkbox" data-el="viewWalk" />視点の自動散歩</label>
+          <button class="btn" data-el="shareBtn">この空を共有</button>
+        </div>
+        <div class="row hint" data-el="shareStatus"></div>
 
         <div class="hint" data-el="iosHint" hidden>
           iPhone / iPad では共有メニューの「ホーム画面に追加」で全画面表示になります。
@@ -232,7 +258,18 @@ export class Panel {
 
     // --- display toggles
     const bindToggle = (
-      key: 'sunDisc' | 'clouds' | 'hazeOn' | 'stars' | 'moon' | 'aurora' | 'parallax' | 'wakeLock',
+      key:
+        | 'sunDisc'
+        | 'contrails'
+        | 'hazeOn'
+        | 'stars'
+        | 'moon'
+        | 'aurora'
+        | 'parallax'
+        | 'viewWalk'
+        | 'soundOn'
+        | 'wakeEnabled'
+        | 'wakeLock',
     ) => {
       const input = this.els[key] as HTMLInputElement;
       input.addEventListener('change', () => {
@@ -242,14 +279,49 @@ export class Panel {
       });
     };
     bindToggle('sunDisc');
-    bindToggle('clouds');
+    bindToggle('contrails');
     bindToggle('hazeOn');
     bindToggle('stars');
     bindToggle('moon');
     bindToggle('aurora');
     bindToggle('parallax');
+    bindToggle('viewWalk');
+    bindToggle('soundOn');
+    bindToggle('wakeEnabled');
     bindToggle('wakeLock');
     if (!('DeviceOrientationEvent' in window)) this.els.parallaxRow.hidden = true;
+
+    // --- clouds mode
+    this.els.cloudSeg.querySelectorAll('button').forEach((b) =>
+      b.addEventListener('click', () => {
+        this.settings.cloudsMode = b.dataset.cm as CloudsMode;
+        this.changed();
+      }),
+    );
+
+    // --- wake time
+    const wakeTime = this.els.wakeTime as HTMLInputElement;
+    wakeTime.addEventListener('change', () => {
+      if (/^\d{2}:\d{2}$/.test(wakeTime.value)) {
+        this.settings.wakeTime = wakeTime.value;
+        this.changed();
+      }
+    });
+
+    // --- sound volume
+    const soundVol = this.els.soundVol as HTMLInputElement;
+    soundVol.addEventListener('input', () => {
+      this.settings.soundVol = Number(soundVol.value) / 100;
+      this.changed();
+    });
+
+    // --- share
+    this.els.shareBtn.addEventListener('click', async () => {
+      this.els.shareStatus.textContent = await this.hooks.shareSky();
+      window.setTimeout(() => {
+        this.els.shareStatus.textContent = '';
+      }, 6000);
+    });
 
     // --- sliders
     const bindRange = (
@@ -301,6 +373,7 @@ export class Panel {
     setSeg(this.els.modeSeg, 'mode', s.timeMode);
     setSeg(this.els.azSeg, 'az', s.azimuthMode);
     setSeg(this.els.qualitySeg, 'q', s.quality);
+    setSeg(this.els.cloudSeg, 'cm', s.cloudsMode);
 
     this.els.timeRow.style.display = s.timeMode === 'manual' ? '' : 'none';
     (this.els.timeSlider as HTMLInputElement).value = String(s.manualMinutes);
@@ -312,11 +385,17 @@ export class Panel {
     (this.els.lonInput as HTMLInputElement).value = s.lonDeg.toFixed(4);
 
     (this.els.sunDisc as HTMLInputElement).checked = s.sunDisc;
-    (this.els.clouds as HTMLInputElement).checked = s.clouds;
+    (this.els.contrails as HTMLInputElement).checked = s.contrails;
     (this.els.hazeOn as HTMLInputElement).checked = s.hazeOn;
     (this.els.stars as HTMLInputElement).checked = s.stars;
     (this.els.moon as HTMLInputElement).checked = s.moon;
     (this.els.aurora as HTMLInputElement).checked = s.aurora;
+    (this.els.viewWalk as HTMLInputElement).checked = s.viewWalk;
+    (this.els.soundOn as HTMLInputElement).checked = s.soundOn;
+    (this.els.wakeEnabled as HTMLInputElement).checked = s.wakeEnabled;
+    (this.els.wakeTime as HTMLInputElement).value = s.wakeTime;
+    (this.els.soundVol as HTMLInputElement).value = String(Math.round(s.soundVol * 100));
+    this.els.contrailRow.style.display = s.cloudsMode === 'off' ? 'none' : '';
 
     const citySel = this.els.citySel as HTMLSelectElement;
     const cityIdx =
@@ -327,7 +406,7 @@ export class Panel {
     (this.els.parallax as HTMLInputElement).checked = s.parallax;
     (this.els.wakeLock as HTMLInputElement).checked = s.wakeLock;
 
-    this.els.cloudRow.style.display = s.clouds ? '' : 'none';
+    this.els.cloudRow.style.display = s.cloudsMode === 'manual' ? '' : 'none';
     (this.els.cloudCover as HTMLInputElement).value = String(Math.round(s.cloudCover * 100));
     this.els.cloudValue.textContent = `${Math.round(s.cloudCover * 100)}%`;
 

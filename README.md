@@ -19,7 +19,10 @@ soramado is a web app that fills your entire screen with a boundless sky. It use
 - **月** — Meeus略算暦(視差補正つき、誤差≈0.3°)による正確な位置・満ち欠け(明暗境界・地球照)・月光によるレイリー散乱の青い夜空 / The moon: truncated-Meeus ephemeris (~0.3° with topocentric parallax), correct phase terminator & earthshine, and a genuinely moonlit Rayleigh-blue night sky
 - **オーロラ** — 地磁気緯度で自動ゲートされるカーテン(緑557.7nm/赤630nm/紫の縁、揺らぎ・拡散・シマーの3時間スケール)/ Aurora gated by geomagnetic latitude: green/red/purple emission profile, waving folds, diffuse glow and shimmering striations
 - **旅する空** — 都市プリセット(南半球・白夜/極夜・オーロラ帯を含む33都市)でその土地の「いま」の空と現地時刻を表示。季節も白夜も物理から自動再現 / "Remote skies": 33 city presets (southern hemisphere, polar day/night, auroral zone) showing that place's sky right now with its local clock — seasons and the midnight sun follow from the physics
-- **オプション** — 太陽ディスク表示、多層の雲(巻雲+中層雲、実高度・実風速・移流・なびき)、地平線の霞、端末の傾き視差 / Optional sun disc, layered clouds (real altitudes/winds, advection, wind-combed fibres), horizon haze, device-tilt parallax
+- **雲** — 3層構造(積雲1.5km/中層雲4km/巻雲10.5km)。実高度・実風速で移流し、形が時間変化し、総観規模の「前線」が通過。照明は空と同じレイマーチング(夕焼け・残照・月光まで)。**実況気象モード**ではOpen-Meteo(無料・キー不要・ブラウザから直接取得)の層別雲量と視程で「今日の本当の空」を再現 / Three cloud decks (cumulus / mid / cirrus) advecting with real winds, evolving shapes, passing synoptic fronts, exactly ray-marched lighting; **live mode** drives per-layer coverage and visibility from Open-Meteo so the window shows today's actual sky
+- **氷晶光学と飛行機雲** — 巻雲があるときの22°ハロー(内側が赤い実物の縁)と幻日、まれに横切り巻雲へ拡散していく飛行機雲 / 22° halo with the real red inner edge + sundogs when cirrus is present; occasional contrails spreading into cirrus wisps
+- **オプション** — 太陽ディスク表示、地平線の霞、端末の傾き視差、視点の自動散歩 / Optional sun disc, horizon haze, device-tilt parallax, slow auto view-walk
+- **体験** — **おはようモード**(起床時刻に向けて本物の夜明けを再生する光目覚まし)、合成環境音(風・鳥・虫、アセット不要)、「この空を共有」URL、**マルチウィンドウ同期**(`?yaw=±度` で各窓の向きをずらすと複数モニタが一枚の空に)、対応ディスプレイではDisplay-P3広色域出力 / Wake-up dawn alarm, synthesised ambience (wind/birds/crickets), shareable sky URLs, multi-window sync (`?yaw=` per-window view offsets turn several monitors into one sky), Display-P3 wide-gamut output where supported
 - **PWA** — インストール・オフライン動作・Wake Lock(スリープ防止)・iOSセーフエリア/100dvh対応 / Installable PWA, offline capable, Wake Lock, iOS safe-area & 100dvh handling
 - **自動品質調整** — レイマーチングのサンプル数と描画解像度をフレームレートに応じて自動調整(60fps目標)/ Adaptive quality: sample count & resolution scale to hold 60 fps, including on phones
 
@@ -38,6 +41,8 @@ npm run preview  # ビルドの確認 / preview the build
 On launch the app estimates your location from the device timezone (no permission prompt) and shows that place's sky in real time. Tapping or moving the mouse reveals a small clock chip and two glass buttons (fullscreen / settings) for 3 seconds; the gear opens a panel with time mode, location (precise GPS optional), sun-disc / cirrus / stars toggles, view direction, brightness, quality and Wake Lock. The glass UI adapts between day and night. Settings persist in localStorage.
 
 iPhone / iPad では共有メニューの「ホーム画面に追加」でフルスクリーンのPWAとして起動できます。 On iPhone/iPad, use "Add to Home Screen" for a fullscreen PWA.
+
+URLパラメータ / URL parameters: `?t=<ISO8601>`(時刻固定・共有用)、`?lat=&lon=`(場所)、`?az=&pitch=`(視点)、`?yaw=<度>`(この窓だけの方位オフセット=マルチモニタ用)。実況気象モードは閲覧者のブラウザからOpen-Meteoへ直接アクセスします(本アプリのサーバは介在しません)。 Live weather fetches Open-Meteo directly from the viewer's browser; no app server is involved.
 
 ## Cloudflare Pages へのデプロイ / Deploying to Cloudflare Pages
 

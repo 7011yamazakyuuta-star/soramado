@@ -45,7 +45,17 @@ uniform int uLightSamples;    // sun-ray march steps
 uniform float uAuroraStrength; // 0..1, geomagnetic-latitude & night gated
 uniform float uSunDiscOn;     // 0/1 (default 0: no identifiable light source)
 uniform float uCloudsOn;      // 0/1 layered cloud system
-uniform float uCloudCover;    // 0..1
+// Per-layer coverage 0..1 (low cumulus / mid sheet / high cirrus). Driven by
+// the manual slider+diurnal model, or by live Open-Meteo data.
+uniform vec3 uCloudCovers;
+uniform float uSynopticAmp;   // synoptic noise amplitude (small in live mode)
+uniform float uVisibility;    // 0..1 (1 = crystal clear) scales the haze
+// Contrail: spawn origin/direction [km, wind frame of the 11 km sheet],
+// seconds since spawn, and on/off.
+uniform vec2 uContrailOrigin;
+uniform vec2 uContrailDir;
+uniform float uContrailT;
+uniform float uContrailOn;
 uniform float uHazeOn;        // 0/1 boundary-layer haze
 uniform float uStarsOn;       // 0/1
 uniform mat3 uStarMat;        // horizon frame -> sky-fixed equatorial frame
@@ -355,7 +365,8 @@ vec3 airglow(vec3 rd) {
 //   morphRate evolution speed of the shapes themselves
 vec4 cloudLayer(vec3 ro, vec3 rd, vec3 skyAmbient, vec3 sunDir,
                 float alt, float featureKm, vec2 windDir, float windSpd,
-                float stretch, float morphRate, float sharp, float opacity) {
+                float stretch, float morphRate, float sharp, float opacity,
+                float coverIn) {
   float t = raySphereFar(ro, rd, Rg + alt);
   if (t <= 0.0) return vec4(0.0);
   vec3 pc = ro + rd * t;
@@ -373,9 +384,9 @@ vec4 cloudLayer(vec3 ro, vec3 rd, vec3 skyAmbient, vec3 sunDir,
 
   // Weather evolution: a synoptic-scale coverage field rides the same wind,
   // so fronts genuinely arrive, thicken and clear instead of one frozen
-  // pattern fading at dusk.
+  // pattern fading at dusk. (Live-weather mode keeps this small: data wins.)
   float synoptic = fbm3lo(vec3(q / 220.0, uCloudTime * 1.2e-4 + 31.7));
-  float cover = mix(0.74, 0.40, uCloudCover) + 0.45 * (synoptic - 0.5);
+  float cover = mix(0.74, 0.40, coverIn) + uSynopticAmp * (synoptic - 0.5);
   float d = smoothstep(cover, cover + 0.30, n);
   d = pow(d, sharp);
   d *= smoothstep(0.015, 0.06, rd.y); // stay clear of the horizon clamp band
@@ -444,6 +455,43 @@ vec3 aurora(vec3 ro, vec3 rd) {
   // Slow breathing of overall activity.
   float breathe = 0.75 + 0.25 * sin(uTime * 0.05 + 1.3);
   return sum * (5.5e-5 / float(N)) * uAuroraStrength * breathe;
+}
+
+// Fair-weather cumulus (~1.5 km): puffy convective cells with pseudo-3D sun
+// shading (density gradient toward the sun brightens lit flanks). Coverage
+// follows the diurnal convection cycle in manual mode, or live data.
+vec4 cumulusLayer(vec3 ro, vec3 rd, vec3 skyAmbient, vec3 sunDir, float coverIn) {
+  if (coverIn < 0.02) return vec4(0.0);
+  float t = raySphereFar(ro, rd, Rg + 1500.0);
+  if (t <= 0.0) return vec4(0.0);
+  vec3 pc = ro + rd * t;
+  vec2 w = normalize(vec2(0.66, 0.75));
+  vec2 q = vec2(dot(pc.xz, w), dot(pc.xz, vec2(-w.y, w.x))) * 1e-3;
+  q.x -= 7.0 * uCloudTime * 1e-3; // gentle boundary-layer wind
+
+  vec3 np = vec3(q / 1.3, uCloudTime * 0.008);
+  float cells = smoothstep(0.62 - 0.34 * coverIn, 0.80 - 0.30 * coverIn,
+                           fbm3lo(np * 0.33 + 5.0));
+  float n = fbm3(np);
+  float d = cells * smoothstep(0.52, 0.80, n);
+  d *= smoothstep(0.025, 0.09, rd.y);
+  if (d <= 0.004) return vec4(0.0);
+
+  vec2 sunQ = vec2(dot(sunDir.xz, w), dot(sunDir.xz, vec2(-w.y, w.x)));
+  float nSun = fbm3(np + vec3(normalize(sunQ + vec2(1e-4)) * 0.25, 0.0));
+  float relief = clamp(0.62 + 1.5 * (n - nSun), 0.30, 1.25);
+
+  vec3 sunT = extinctionFromOd(sunOpticalDepth(pc, sunDir));
+  float mu = dot(rd, sunDir);
+  float ph = 0.5 * phaseMieHG(mu, 0.45) + 0.5 / (4.0 * PI);
+  float powder = 1.0 - exp(-5.0 * d);
+  vec3 light = uSunIrradiance * sunT * ph * 3.1 * relief * (0.5 + 0.5 * powder)
+             + skyAmbient * 0.9;
+  if (uMoonIrr.g > 1e-9) {
+    vec3 moonT = extinctionFromOd(sunOpticalDepth(pc, uMoonDir));
+    light += uMoonIrr * moonT * ph * 3.1 * relief;
+  }
+  return vec4(light, min(d * 1.4, 1.0) * 0.9);
 }
 
 // Boundary-layer haze (~1.6 km): a faintly irregular veil that hugs the
@@ -575,17 +623,72 @@ void main() {
   if (uCloudsOn > 0.5) {
     // Cirrus at 10.5 km: long fibres combed by a ~26 m/s jet-level wind.
     vec4 ch = cloudLayer(ro, rd, sky, sunDir,
-                         10500.0, 7.0, vec2(0.92, 0.25), 26.0, 4.5, 0.0022, 1.6, 0.5);
+                         10500.0, 7.0, vec2(0.92, 0.25), 26.0, 4.5, 0.0022, 1.6, 0.5,
+                         uCloudCovers.z);
+    float cirrusA = ch.a;
     sky = mix(sky, ch.rgb, ch.a);
+
+    // Contrail at ~11 km: razor sharp behind the (unseen) aircraft, then
+    // spreading and fading into a cirrus wisp; drifts with the layer wind.
+    if (uContrailOn > 0.5) {
+      float tc = raySphereFar(ro, rd, Rg + 11000.0);
+      vec2 qc = (ro + rd * tc).xz * 1e-3 -
+                normalize(vec2(0.92, 0.25)) * (26.0 * uCloudTime * 1e-3);
+      vec2 rel = qc - uContrailOrigin;
+      float s = dot(rel, uContrailDir);
+      float behind = 0.25 * uContrailT - s; // plane flies at 250 m/s
+      if (s > 0.0 && behind > 0.0) {
+        float age = behind / 0.25;
+        float dd = abs(dot(rel, vec2(-uContrailDir.y, uContrailDir.x)));
+        float wdt = 0.05 + 0.0016 * age;
+        float dens = exp(-(dd * dd) / (2.0 * wdt * wdt)) * exp(-age / 650.0) *
+                     smoothstep(0.0, 0.5, behind) * smoothstep(0.03, 0.07, rd.y);
+        if (dens > 0.004) {
+          vec3 Tc = extinctionFromOd(sunOpticalDepth(ro + rd * tc, sunDir));
+          float phc = 0.7 * phaseMieHG(dot(rd, sunDir), 0.5) + 0.3 / (4.0 * PI);
+          vec3 Lc = uSunIrradiance * Tc * phc * 3.4 + sky * 0.8;
+          sky = mix(sky, Lc, min(dens * 1.1, 0.85));
+        }
+      }
+    }
+
     // Mid-level sheet at 4 km: smaller puffs, different wind direction;
     // being closer it sweeps by faster, which is what sells the depth.
     vec4 cm = cloudLayer(ro, rd, sky, sunDir,
-                         4000.0, 2.6, vec2(0.5, 0.6), 11.0, 1.3, 0.005, 1.2, 0.62);
+                         4000.0, 2.6, vec2(0.5, 0.6), 11.0, 1.3, 0.005, 1.2, 0.62,
+                         uCloudCovers.y);
     sky = mix(sky, cm.rgb, cm.a);
+
+    // Low cumulus at 1.5 km (diurnal convection / live low cloud).
+    vec4 cu = cumulusLayer(ro, rd, sky, sunDir, uCloudCovers.x);
+    sky = mix(sky, cu.rgb, cu.a);
+
+    // 22-degree halo and sundogs: ice-crystal optics, only where the cirrus
+    // sheet actually is. The ring has the real sharp inner edge (minimum
+    // deviation) with red inside, and parhelia flank a low sun.
+    if (cirrusA > 0.01 && sunDir.y > -0.05) {
+      float theta = degrees(acos(clamp(dot(rd, sunDir), -1.0, 1.0)));
+      float x = theta - 22.0;
+      if (abs(x) < 6.0) {
+        float th = raySphereFar(ro, rd, Rg + 10500.0);
+        vec3 Th = extinctionFromOd(sunOpticalDepth(ro + rd * th, sunDir));
+        float ring = smoothstep(-0.5, 0.3, x) * exp(-x * x / 8.0);
+        vec3 tint = mix(vec3(1.0, 0.55, 0.45), vec3(0.85, 0.92, 1.0),
+                        smoothstep(-0.2, 1.6, x));
+        sky += uSunIrradiance * Th * tint * ring * cirrusA * 0.045;
+
+        float sunElevDeg = degrees(asin(clamp(sunDir.y, -1.0, 1.0)));
+        float dElev = degrees(asin(clamp(rd.y, -1.0, 1.0))) - sunElevDeg;
+        float dogs = exp(-dElev * dElev / 4.5) * exp(-x * x / 2.4) *
+                     smoothstep(32.0, 8.0, sunElevDeg);
+        sky += uSunIrradiance * Th * vec3(1.0, 0.62, 0.42) * dogs * cirrusA * 0.16;
+      }
+    }
   }
   if (uHazeOn > 0.5) {
     vec4 hz = hazeLayer(ro, rd, sky, sunDir);
-    sky = mix(sky, hz.rgb, hz.a);
+    // Live visibility scales the veil (10 km murk vs crystal-clear day).
+    sky = mix(sky, hz.rgb, hz.a * mix(1.7, 0.6, uVisibility));
   }
 
   // ----- HDR -> display
