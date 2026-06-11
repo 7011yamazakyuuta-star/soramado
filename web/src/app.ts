@@ -2,7 +2,9 @@ import { SkyRenderer, type RenderParams } from './gl/renderer';
 import { loadSkySource } from './atmosphere/lut';
 import { rayleighBeta, SUN_TINT, SUN_INTENSITY } from './atmosphere/constants';
 import { solarPosition, lstRad, twilightPhase, TWILIGHT_LABEL_JA } from './sun/solar';
+import { moonState, moonIrradianceFactor } from './sun/moon';
 import { estimateLocationFromTimezone } from './sun/tzlocation';
+import { geomagneticLatitudeDeg, auroraZoneFactor } from './sky/cities';
 import { SimClock } from './time/clock';
 import { loadSettings, saveSettings, type Settings, type TimeMode } from './settings';
 import { Panel } from './ui/panel';
@@ -136,6 +138,18 @@ export class App {
   private reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
   private simDate = new Date();
   private tzZoneLabel: string | null = null;
+  // Device-tilt parallax: a real depth cue on handhelds. The baseline drifts
+  // slowly toward the current posture, so any holding angle becomes neutral.
+  private tiltBase: { b: number; g: number } | null = null;
+  private tiltTarget: [number, number] = [0, 0];
+  private tiltCur: [number, number] = [0, 0];
+  /** Fixed simulation instant from the ?t= URL param (testing/demos). */
+  private overrideDate: Date | null = null;
+  /** Weather clock [s]: follows simulation time so demo mode is a cloud
+   *  timelapse and the manual slider scrubs the sky; capped at 40x so the
+   *  pattern streams instead of strobing. */
+  private cloudTimeSec = 0;
+  private prevSimMs: number | null = null;
 
   start(): void {
     this.canvas = document.getElementById('sky') as HTMLCanvasElement;
@@ -158,6 +172,7 @@ export class App {
         }
       },
       requestGeolocation: () => this.requestGeolocation(),
+      requestParallaxPermission: () => this.requestParallaxPermission(),
       toggleFullscreen: () => {
         if (document.fullscreenElement) void document.exitFullscreen();
         else void document.documentElement.requestFullscreen({ navigationUI: 'hide' });
@@ -174,6 +189,14 @@ export class App {
 
     void this.wakeLock.setEnabled(this.settings.wakeLock);
     this.resolveLocation();
+    this.setupParallax();
+
+    // ?t=2026-06-29T12:00:00Z pins the simulation clock (testing/demos).
+    const tParam = new URLSearchParams(location.search).get('t');
+    if (tParam) {
+      const d = new Date(tParam);
+      if (!Number.isNaN(d.getTime())) this.overrideDate = d;
+    }
 
     // Optional precomputed multiple-scattering LUTs (Phase 2 artefacts).
     void loadSkySource().then((src) => {
@@ -202,12 +225,41 @@ export class App {
     }
   }
 
+  // ------------------------------------------------------------ parallax
+  private setupParallax(): void {
+    if (this.reducedMotion || !('DeviceOrientationEvent' in window)) return;
+    window.addEventListener('deviceorientation', (e: DeviceOrientationEvent) => {
+      if (!this.settings.parallax || e.beta == null || e.gamma == null) return;
+      if (!this.tiltBase) this.tiltBase = { b: e.beta, g: e.gamma };
+      const base = this.tiltBase;
+      base.b += (e.beta - base.b) * 0.004;
+      base.g += (e.gamma - base.g) * 0.004;
+      const db = Math.max(-20, Math.min(20, e.beta - base.b));
+      const dg = Math.max(-20, Math.min(20, e.gamma - base.g));
+      this.tiltTarget = [(dg / 20) * 1.4, (db / 20) * -1.0]; // deg: yaw, pitch
+    });
+  }
+
+  /** iOS 13+ requires a user-gesture permission for orientation events. */
+  private requestParallaxPermission(): void {
+    const D = DeviceOrientationEvent as unknown as {
+      requestPermission?: () => Promise<string>;
+    };
+    if (typeof D.requestPermission === 'function') {
+      void D.requestPermission().catch(() => {
+        /* denied — parallax simply stays inactive */
+      });
+    }
+  }
+
   private locationLabel(): string {
     switch (this.settings.locationSource) {
       case 'geo':
         return '現在地';
       case 'manual':
         return '手動設定';
+      case 'city':
+        return this.settings.placeName ?? '都市プリセット';
       case 'tz':
         return `推定: ${this.tzZoneLabel ?? 'タイムゾーン'}`;
       default:
@@ -226,6 +278,8 @@ export class App {
           this.settings.latDeg = Math.round(pos.coords.latitude * 1e4) / 1e4;
           this.settings.lonDeg = Math.round(pos.coords.longitude * 1e4) / 1e4;
           this.settings.locationSource = 'geo';
+          this.settings.placeName = null;
+          this.settings.displayTz = null; // device timezone is correct here
           saveSettings(this.settings);
           resolve('現在地を設定しました');
         },
@@ -235,6 +289,36 @@ export class App {
         { enableHighAccuracy: false, timeout: 10_000, maximumAge: 3_600_000 },
       );
     });
+  }
+
+  // --------------------------------------------------------- clock display
+  private fmtCache: { tz: string | null; time: Intl.DateTimeFormat; date: Intl.DateTimeFormat } | null =
+    null;
+
+  /** Clock & date strings, in the viewed city's timezone when one is set. */
+  private formatClock(d: Date, tz: string | null): [string, string] {
+    try {
+      if (!this.fmtCache || this.fmtCache.tz !== tz) {
+        this.fmtCache = {
+          tz,
+          time: new Intl.DateTimeFormat('ja-JP', {
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false,
+            timeZone: tz ?? undefined,
+          }),
+          // sv-SE locale renders as YYYY-MM-DD.
+          date: new Intl.DateTimeFormat('sv-SE', { timeZone: tz ?? undefined }),
+        };
+      }
+      return [this.fmtCache.time.format(d), this.fmtCache.date.format(d)];
+    } catch {
+      const pad = (n: number) => String(n).padStart(2, '0');
+      return [
+        `${pad(d.getHours())}:${pad(d.getMinutes())}`,
+        `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
+      ];
+    }
   }
 
   // ------------------------------------------------------------ main loop
@@ -252,10 +336,44 @@ export class App {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     this.renderer.resize(this.cssW, this.cssH, dpr, level.scale);
 
-    // --- simulation time & sun
-    this.simDate = this.clock.tick(s);
+    // --- simulation time, sun & moon
+    this.simDate = this.overrideDate ?? this.clock.tick(s);
+
+    // Advance the weather clock by simulated time. Continuous fast-forward
+    // (demo, 720x) is capped to a 40x timelapse; discontinuous jumps
+    // (slider scrubs) are applied in full so the cloud field changes too.
+    {
+      const simMs = this.simDate.getTime();
+      if (this.prevSimMs !== null) {
+        const dSim = (simMs - this.prevSimMs) / 1000;
+        const cap = 40 * Math.min(dtMs / 1000, 0.25);
+        this.cloudTimeSec +=
+          Math.abs(dSim) <= 60 ? Math.max(-cap, Math.min(cap, dSim)) : dSim;
+      }
+      this.prevSimMs = simMs;
+    }
+
     const sun = solarPosition(this.simDate, s.latDeg, s.lonDeg);
     const sunDir = dirFromAzEl(sun.azimuthDeg, sun.elevationDeg);
+
+    const moon = moonState(this.simDate, s.latDeg, s.lonDeg);
+    // Moonlit-sky scattering only matters once the sun is well down, and
+    // only when the moon is up; gating also skips the extra ray march.
+    const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
+    const nightGate = clamp01((-2 - sun.trueElevationDeg) / 6);
+    const horizonGate = clamp01((moon.elevationDeg + 4) / 5);
+    const mf = s.moon ? moonIrradianceFactor(moon) * nightGate * horizonGate : 0;
+    const moonIrr: [number, number, number] = [
+      this.sunIrradiance[0] * mf,
+      this.sunIrradiance[1] * mf,
+      this.sunIrradiance[2] * mf,
+    ];
+
+    // Aurora: realistic only inside the auroral oval, and only in dark skies.
+    const auroraNight = clamp01((-8 - sun.trueElevationDeg) / 6);
+    const auroraStrength = s.aurora
+      ? auroraZoneFactor(geomagneticLatitudeDeg(s.latDeg, s.lonDeg)) * auroraNight
+      : 0;
 
     // --- view azimuth: keep the solar aureole out of frame by default
     const tSec = (now - this.startMs) / 1000;
@@ -286,6 +404,13 @@ export class App {
         0.1 * Math.sin((tSec / 71) * 2 * Math.PI + 0.7) +
         0.05 * Math.sin((tSec / 167) * 2 * Math.PI + 2.1);
     }
+
+    // --- device-tilt parallax (smoothed)
+    const k = Math.min(1, dtMs / 250);
+    this.tiltCur[0] += (this.tiltTarget[0] - this.tiltCur[0]) * k;
+    this.tiltCur[1] += (this.tiltTarget[1] - this.tiltCur[1]) * k;
+    yawDeg += this.tiltCur[0];
+    pitchDeg += this.tiltCur[1];
 
     // --- camera basis (columns: right, up, forward)
     const fwd = dirFromAzEl(yawDeg, pitchDeg);
@@ -327,6 +452,7 @@ export class App {
 
     const params: RenderParams = {
       timeSec: tSec,
+      cloudTimeSec: this.cloudTimeSec,
       frame: this.frame++,
       camBasis,
       tanHalfFov: Math.tan((60 / 2) * RAD),
@@ -339,8 +465,16 @@ export class App {
       sunDisc: s.sunDisc,
       clouds: s.clouds,
       cloudCover: s.cloudCover,
+      haze: s.hazeOn,
       stars: s.stars,
       starMat,
+      moonDir: moon.dir,
+      moonIrr,
+      moonDisc: s.moon,
+      // Display scale x2.2: the true 0.5-degree disc reads unnaturally tiny
+      // on a monitor (the same convention as landscape photography).
+      moonAngularRadius: moon.angularRadius * 2.2,
+      auroraStrength,
     };
     this.renderer.render(params);
 
@@ -349,11 +483,10 @@ export class App {
       this.lastStatusMs = now;
       // The glass UI adapts to the sky: bright glass + dark ink in daylight.
       document.body.classList.toggle('theme-day', sun.trueElevationDeg > -3);
-      const d = this.simDate;
-      const pad = (n: number) => String(n).padStart(2, '0');
+      const [clockText, dateText] = this.formatClock(this.simDate, s.displayTz);
       this.panel.setStatus({
-        clockText: `${pad(d.getHours())}:${pad(d.getMinutes())}`,
-        dateText: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
+        clockText,
+        dateText,
         sunElevDeg: sun.elevationDeg,
         twilightLabel: TWILIGHT_LABEL_JA[twilightPhase(sun.trueElevationDeg)],
         engineLabel: this.renderer.usingLut ? '多重散乱LUT' : '単一散乱RT',

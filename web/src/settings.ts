@@ -4,19 +4,33 @@ export type TimeMode = 'real' | 'manual' | 'demo';
 export type QualityMode = 'auto' | 'low' | 'medium' | 'high';
 export type AzimuthMode = 'auto' | 'manual';
 /** How the current lat/lon was determined. */
-export type LocationSource = 'default' | 'tz' | 'geo' | 'manual';
+export type LocationSource = 'default' | 'tz' | 'geo' | 'manual' | 'city';
 
 export interface Settings {
+  /** Settings schema revision (for default migrations). */
+  rev: number;
   timeMode: TimeMode;
   /** Manual mode: local time of day in minutes [0, 1440). */
   manualMinutes: number;
   latDeg: number;
   lonDeg: number;
   locationSource: LocationSource;
+  /** City preset name (locationSource === 'city'). */
+  placeName: string | null;
+  /** IANA timezone for the clock display (city presets). */
+  displayTz: string | null;
   sunDisc: boolean;
   clouds: boolean;
   cloudCover: number; // 0..1
+  /** Boundary-layer haze: subtle horizon irregularity. */
+  hazeOn: boolean;
   stars: boolean;
+  /** Moon disc + moonlit sky. */
+  moon: boolean;
+  /** Aurora (auto-gated by geomagnetic latitude; visible at polar presets). */
+  aurora: boolean;
+  /** Device-tilt parallax (where orientation sensors exist). */
+  parallax: boolean;
   pitchDeg: number; // view elevation at screen centre
   azimuthMode: AzimuthMode;
   azimuthDeg: number; // manual view azimuth, degrees from north
@@ -30,15 +44,22 @@ export interface Settings {
 export const DEFAULT_LOCATION = { latDeg: 35.6762, lonDeg: 139.6503 };
 
 export const DEFAULT_SETTINGS: Settings = {
+  rev: 2,
   timeMode: 'real',
   manualMinutes: 12 * 60,
   latDeg: DEFAULT_LOCATION.latDeg,
   lonDeg: DEFAULT_LOCATION.lonDeg,
   locationSource: 'default',
+  placeName: null,
+  displayTz: null,
   sunDisc: false, // requirement: no identifiable light source by default
-  clouds: false,
+  clouds: false, // pristine sky by default; clouds are one tap away
   cloudCover: 0.35,
+  hazeOn: true,
   stars: true,
+  moon: true,
+  aurora: true,
+  parallax: true,
   pitchDeg: 32,
   azimuthMode: 'auto',
   azimuthDeg: 0,
@@ -58,6 +79,11 @@ export function loadSettings(): Settings {
     // Migrate pre-locationSource saves.
     if (!parsed.locationSource) {
       merged.locationSource = parsed.usedGeolocation ? 'geo' : 'default';
+    }
+    // rev 2: clouds became opt-in.
+    if ((parsed.rev ?? 1) < 2) {
+      merged.clouds = DEFAULT_SETTINGS.clouds;
+      merged.rev = 2;
     }
     delete (merged as unknown as Record<string, unknown>).usedGeolocation;
     return merged;

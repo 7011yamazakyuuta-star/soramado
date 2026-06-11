@@ -15,8 +15,11 @@ soramado is a web app that fills your entire screen with a boundless sky. It use
 - **物理ベースの空** — レイリー散乱(波長依存 λ⁻⁴)+ミー散乱の単一散乱モデルをフラグメントシェーダでレイマーチング計算。オゾン吸収も含み、薄明の藍色まで物理的に再現 / Physically based sky: single-scattering Rayleigh (λ⁻⁴) + Mie ray marching in a fragment shader, with ozone absorption for the deep indigo of twilight
 - **「発光点を特定させない」設計** — 太陽ディスクはデフォルト非表示。HDR → ACESトーンマップ → ガンマ補正 → **ブルーノイズディザリング**(8bit出力でのバンディング防止)。視線にごく微小な漂動を入れて静止画感を排除 / Designed to hide the light source: no sun disc by default, HDR → ACES tone mapping → gamma → **blue-noise dithering** (kills 8-bit banding), plus an imperceptibly slow view drift so the image never reads as a still picture
 - **時刻システム** — 実時刻+位置情報(拒否時は手入力または東京)/ 手動スライダー / デモモード(1日を2分で再生)。太陽位置はNOAAの太陽位置算法 / Time modes: real time + geolocation (manual/Tokyo fallback), manual slider, and a demo mode (a full day in 2 minutes). Solar position via the NOAA solar calculator equations
-- **夜空** — ハッシュベースの手続き生成による星空(恒星時で回転)+大気光 / Procedural hash-based stars rotating with sidereal time, plus airglow
-- **オプション** — 太陽ディスク表示、薄い巻雲(FBMノイズ)/ Optional sun disc and thin FBM cirrus
+- **夜空** — 実在の恒星カタログ116星(本物の星座が正しい位置に)+手続き生成の微光星+天の川(銀河座標で実位置)+大気光。星は恒星時で回転し、地平線近くほど強く瞬き、大気減光で赤くなる / Real 116-star catalogue (true constellations), procedural faint stars, the Milky Way at its true galactic position, airglow; stars rotate with sidereal time, twinkle harder near the horizon and redden with extinction
+- **月** — Meeus略算暦(視差補正つき、誤差≈0.3°)による正確な位置・満ち欠け(明暗境界・地球照)・月光によるレイリー散乱の青い夜空 / The moon: truncated-Meeus ephemeris (~0.3° with topocentric parallax), correct phase terminator & earthshine, and a genuinely moonlit Rayleigh-blue night sky
+- **オーロラ** — 地磁気緯度で自動ゲートされるカーテン(緑557.7nm/赤630nm/紫の縁、揺らぎ・拡散・シマーの3時間スケール)/ Aurora gated by geomagnetic latitude: green/red/purple emission profile, waving folds, diffuse glow and shimmering striations
+- **旅する空** — 都市プリセット(南半球・白夜/極夜・オーロラ帯を含む33都市)でその土地の「いま」の空と現地時刻を表示。季節も白夜も物理から自動再現 / "Remote skies": 33 city presets (southern hemisphere, polar day/night, auroral zone) showing that place's sky right now with its local clock — seasons and the midnight sun follow from the physics
+- **オプション** — 太陽ディスク表示、多層の雲(巻雲+中層雲、実高度・実風速・移流・なびき)、地平線の霞、端末の傾き視差 / Optional sun disc, layered clouds (real altitudes/winds, advection, wind-combed fibres), horizon haze, device-tilt parallax
 - **PWA** — インストール・オフライン動作・Wake Lock(スリープ防止)・iOSセーフエリア/100dvh対応 / Installable PWA, offline capable, Wake Lock, iOS safe-area & 100dvh handling
 - **自動品質調整** — レイマーチングのサンプル数と描画解像度をフレームレートに応じて自動調整(60fps目標)/ Adaptive quality: sample count & resolution scale to hold 60 fps, including on phones
 

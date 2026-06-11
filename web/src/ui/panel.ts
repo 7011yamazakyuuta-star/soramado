@@ -1,4 +1,5 @@
 import type { Settings, TimeMode, QualityMode, AzimuthMode } from '../settings';
+import { CITY_PRESETS } from '../sky/cities';
 
 export interface PanelHooks {
   /** Persist settings and apply side effects (wake lock, etc.). */
@@ -7,6 +8,8 @@ export interface PanelHooks {
   onTimeModeChanged(prev: TimeMode): void;
   /** Ask for the device location; resolves to a user-facing status string. */
   requestGeolocation(): Promise<string>;
+  /** iOS needs a user-gesture permission for tilt parallax. */
+  requestParallaxPermission(): void;
   toggleFullscreen(): void;
 }
 
@@ -80,6 +83,13 @@ export class Panel {
           <input type="number" step="0.0001" min="-90" max="90" data-el="latInput" title="緯度 / Latitude" />
           <input type="number" step="0.0001" min="-180" max="180" data-el="lonInput" title="経度 / Longitude" />
         </div>
+        <div class="row">
+          <label class="head">旅する空</label>
+          <select data-el="citySel">
+            <option value="">— 都市プリセット / Remote skies —</option>
+            ${CITY_PRESETS.map((c, i) => `<option value="${i}">${c.name}</option>`).join('')}
+          </select>
+        </div>
         <div class="row hint" data-el="geoStatus"></div>
 
         <div class="divider"></div>
@@ -87,8 +97,12 @@ export class Panel {
         <div class="row">
           <label class="head">表示</label>
           <label class="toggle"><input type="checkbox" data-el="sunDisc" />太陽ディスク</label>
-          <label class="toggle"><input type="checkbox" data-el="clouds" />巻雲</label>
+          <label class="toggle"><input type="checkbox" data-el="clouds" />雲</label>
+          <label class="toggle"><input type="checkbox" data-el="hazeOn" />霞</label>
           <label class="toggle"><input type="checkbox" data-el="stars" />星空</label>
+          <label class="toggle"><input type="checkbox" data-el="moon" />月</label>
+          <label class="toggle"><input type="checkbox" data-el="aurora" />オーロラ</label>
+          <label class="toggle" data-el="parallaxRow"><input type="checkbox" data-el="parallax" />視差(傾き)</label>
         </div>
 
         <div class="row" data-el="cloudRow">
@@ -195,23 +209,47 @@ export class Panel {
       if (Number.isFinite(lat) && Math.abs(lat) <= 90) this.settings.latDeg = lat;
       if (Number.isFinite(lon) && Math.abs(lon) <= 180) this.settings.lonDeg = lon;
       this.settings.locationSource = 'manual';
+      this.settings.placeName = null;
+      this.settings.displayTz = null;
       this.changed();
     };
     latInput.addEventListener('change', onLatLon);
     lonInput.addEventListener('change', onLatLon);
 
+    // --- remote-sky city presets
+    const citySel = this.els.citySel as HTMLSelectElement;
+    citySel.addEventListener('change', () => {
+      const idx = Number(citySel.value);
+      const city = CITY_PRESETS[idx];
+      if (!city) return;
+      this.settings.latDeg = city.latDeg;
+      this.settings.lonDeg = city.lonDeg;
+      this.settings.placeName = city.name;
+      this.settings.displayTz = city.tz;
+      this.settings.locationSource = 'city';
+      this.changed();
+    });
+
     // --- display toggles
-    const bindToggle = (key: 'sunDisc' | 'clouds' | 'stars' | 'wakeLock') => {
+    const bindToggle = (
+      key: 'sunDisc' | 'clouds' | 'hazeOn' | 'stars' | 'moon' | 'aurora' | 'parallax' | 'wakeLock',
+    ) => {
       const input = this.els[key] as HTMLInputElement;
       input.addEventListener('change', () => {
         this.settings[key] = input.checked;
+        if (key === 'parallax' && input.checked) this.hooks.requestParallaxPermission();
         this.changed();
       });
     };
     bindToggle('sunDisc');
     bindToggle('clouds');
+    bindToggle('hazeOn');
     bindToggle('stars');
+    bindToggle('moon');
+    bindToggle('aurora');
+    bindToggle('parallax');
     bindToggle('wakeLock');
+    if (!('DeviceOrientationEvent' in window)) this.els.parallaxRow.hidden = true;
 
     // --- sliders
     const bindRange = (
@@ -275,7 +313,18 @@ export class Panel {
 
     (this.els.sunDisc as HTMLInputElement).checked = s.sunDisc;
     (this.els.clouds as HTMLInputElement).checked = s.clouds;
+    (this.els.hazeOn as HTMLInputElement).checked = s.hazeOn;
     (this.els.stars as HTMLInputElement).checked = s.stars;
+    (this.els.moon as HTMLInputElement).checked = s.moon;
+    (this.els.aurora as HTMLInputElement).checked = s.aurora;
+
+    const citySel = this.els.citySel as HTMLSelectElement;
+    const cityIdx =
+      s.locationSource === 'city'
+        ? CITY_PRESETS.findIndex((c) => c.name === s.placeName)
+        : -1;
+    citySel.value = cityIdx >= 0 ? String(cityIdx) : '';
+    (this.els.parallax as HTMLInputElement).checked = s.parallax;
     (this.els.wakeLock as HTMLInputElement).checked = s.wakeLock;
 
     this.els.cloudRow.style.display = s.clouds ? '' : 'none';
