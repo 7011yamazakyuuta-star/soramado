@@ -16,7 +16,11 @@ export default defineConfig({
         description:
           'ディスプレイを空への窓に。物理ベースの大気散乱をリアルタイム描画する空のレンダラー / Turn your display into a window to an endless, physically simulated sky.',
         lang: 'ja',
-        display: 'fullscreen',
+        // iOS does not support display:"fullscreen" and bakes the value in
+        // at install time — "standalone" is the reliable cross-platform
+        // choice; Android still gets true fullscreen via display_override.
+        display: 'standalone',
+        display_override: ['fullscreen', 'standalone'],
         orientation: 'any',
         start_url: '.',
         scope: '.',
