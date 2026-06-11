@@ -16,6 +16,8 @@ export interface StatusInfo {
   sunElevDeg: number;
   twilightLabel: string;
   engineLabel: string;
+  /** e.g. 推定: Asia/Tokyo, 現在地, 手動 */
+  locationLabel: string;
   fps: number;
 }
 
@@ -23,6 +25,9 @@ const SHOW_MS = 3000;
 
 const svgExpand =
   '<svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>';
+const svgGear =
+  '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.1"/>' +
+  '<path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.06-1.58 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09c.7 0 1.32-.42 1.58-1.06a1.7 1.7 0 0 0-.34-1.87l-.06-.06A2 2 0 1 1 7.1 4.12l.06.06c.5.5 1.25.63 1.87.34h.08a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09c0 .68.41 1.3 1.03 1.56.62.29 1.37.16 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06c-.5.5-.63 1.25-.34 1.87v.08c.26.62.88 1.03 1.56 1.03H21a2 2 0 1 1 0 4h-.09c-.68 0-1.3.41-1.56 1.03Z"/></svg>';
 
 export class Panel {
   private root: HTMLElement;
@@ -43,14 +48,15 @@ export class Panel {
   // ------------------------------------------------------------- DOM build
   private build(): void {
     this.root.innerHTML = `
-      <div class="statusline">
-        <div class="clock" data-el="clock">--:--</div>
-        <div data-el="meta">—</div>
+      <div class="chip glass" data-el="statusChip">
+        <span class="clock" data-el="clock">--:--</span>
+        <span class="phase" data-el="phase"></span>
       </div>
       <div class="topbar">
-        <button class="iconbtn" data-el="fsBtn" title="フルスクリーン / Fullscreen" aria-label="フルスクリーン">${svgExpand}</button>
+        <button class="iconbtn glass" data-el="fsBtn" title="フルスクリーン / Fullscreen" aria-label="フルスクリーン">${svgExpand}</button>
+        <button class="iconbtn glass" data-el="gearBtn" title="設定 / Settings" aria-label="設定" aria-expanded="false">${svgGear}</button>
       </div>
-      <div class="panel" data-el="panel">
+      <div class="panel glass" data-el="panel" role="dialog" aria-label="設定">
         <h1>空窓 <span class="en">SORAMADO</span></h1>
 
         <div class="row">
@@ -130,15 +136,19 @@ export class Panel {
         <div class="hint" data-el="iosHint" hidden>
           iPhone / iPad では共有メニューの「ホーム画面に追加」で全画面表示になります。
         </div>
-        <div class="hint">
-          物理ベースの大気散乱シミュレーション。独立したオープンソースプロジェクトです。<br />
-          Physically-based atmospheric scattering. An independent open-source project.
-        </div>
+        <div class="divider"></div>
+        <div class="meta" data-el="meta">—</div>
       </div>
     `;
 
     this.root.querySelectorAll<HTMLElement>('[data-el]').forEach((el) => {
       this.els[el.dataset.el!] = el;
+    });
+
+    // --- gear opens/closes the panel
+    this.els.gearBtn.addEventListener('click', () => {
+      const open = this.root.classList.toggle('panel-open');
+      this.els.gearBtn.setAttribute('aria-expanded', String(open));
     });
 
     // --- fullscreen
@@ -184,6 +194,7 @@ export class Panel {
       const lon = Number(lonInput.value);
       if (Number.isFinite(lat) && Math.abs(lat) <= 90) this.settings.latDeg = lat;
       if (Number.isFinite(lon) && Math.abs(lon) <= 180) this.settings.lonDeg = lon;
+      this.settings.locationSource = 'manual';
       this.changed();
     };
     latInput.addEventListener('change', onLatLon);
@@ -284,12 +295,13 @@ export class Panel {
     this.els.exposureValue.textContent = `${s.exposureBias >= 0 ? '+' : ''}${s.exposureBias.toFixed(1)} EV`;
   }
 
-  /** Update the always-on status line (called a few times per second). */
+  /** Update the ambient chip and the in-panel details line. */
   setStatus(info: StatusInfo): void {
     this.els.clock.textContent = info.clockText;
+    this.els.phase.textContent = info.twilightLabel;
     this.els.meta.textContent =
       `${info.dateText}  太陽高度 ${info.sunElevDeg >= 0 ? '+' : ''}${info.sunElevDeg.toFixed(1)}°` +
-      `  ${info.twilightLabel}  |  ${info.engineLabel}  ${info.fps | 0} fps`;
+      `  |  ${info.locationLabel}  |  ${info.engineLabel}  ${info.fps | 0} fps`;
   }
 
   // ------------------------------------------------------ auto-hide logic
@@ -314,6 +326,8 @@ export class Panel {
     const active = document.activeElement;
     if (active instanceof HTMLElement && this.root.contains(active)) active.blur();
     this.root.classList.remove('visible');
+    this.root.classList.remove('panel-open');
+    this.els.gearBtn.setAttribute('aria-expanded', 'false');
     this.root.setAttribute('aria-hidden', 'true');
     document.body.classList.add('idle-cursor');
   }

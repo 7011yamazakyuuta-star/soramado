@@ -2,13 +2,13 @@ import { SkyRenderer, type RenderParams } from './gl/renderer';
 import { loadSkySource } from './atmosphere/lut';
 import { rayleighBeta, SUN_TINT, SUN_INTENSITY } from './atmosphere/constants';
 import { solarPosition, lstRad, twilightPhase, TWILIGHT_LABEL_JA } from './sun/solar';
+import { estimateLocationFromTimezone } from './sun/tzlocation';
 import { SimClock } from './time/clock';
 import { loadSettings, saveSettings, type Settings, type TimeMode } from './settings';
 import { Panel } from './ui/panel';
 import { WakeLockManager } from './wakelock';
 
 const RAD = Math.PI / 180;
-const GEO_ASKED_KEY = 'soramado:geoAsked';
 
 // ----------------------------------------------------------- small helpers
 /** Unit direction from azimuth (deg, from north, clockwise) and elevation. */
@@ -135,6 +135,7 @@ export class App {
   private viewAzDeg: number | null = null; // slewed auto azimuth
   private reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
   private simDate = new Date();
+  private tzZoneLabel: string | null = null;
 
   start(): void {
     this.canvas = document.getElementById('sky') as HTMLCanvasElement;
@@ -172,7 +173,7 @@ export class App {
     this.cssH = this.canvas.clientHeight;
 
     void this.wakeLock.setEnabled(this.settings.wakeLock);
-    this.maybeAskGeolocation();
+    this.resolveLocation();
 
     // Optional precomputed multiple-scattering LUTs (Phase 2 artefacts).
     void loadSkySource().then((src) => {
@@ -182,15 +183,36 @@ export class App {
     requestAnimationFrame(this.loop);
   }
 
-  // --------------------------------------------------------- geolocation
-  private maybeAskGeolocation(): void {
-    try {
-      if (localStorage.getItem(GEO_ASKED_KEY)) return;
-      localStorage.setItem(GEO_ASKED_KEY, '1');
-    } catch {
-      /* continue without the flag */
+  // ------------------------------------------------------------ location
+  /**
+   * Make the sky match "where you are" without any permission prompt: when
+   * no explicit location was ever chosen, estimate one from the device's
+   * timezone. The 現在地 button still offers precise GPS on top of this.
+   */
+  private resolveLocation(): void {
+    const est = estimateLocationFromTimezone();
+    if (!est) return;
+    this.tzZoneLabel = est.zone;
+    if (this.settings.locationSource === 'default' || this.settings.locationSource === 'tz') {
+      this.settings.latDeg = est.latDeg;
+      this.settings.lonDeg = est.lonDeg;
+      this.settings.locationSource = 'tz';
+      saveSettings(this.settings);
+      this.panel.refreshFromSettings();
     }
-    void this.requestGeolocation().then(() => this.panel.refreshFromSettings());
+  }
+
+  private locationLabel(): string {
+    switch (this.settings.locationSource) {
+      case 'geo':
+        return '現在地';
+      case 'manual':
+        return '手動設定';
+      case 'tz':
+        return `推定: ${this.tzZoneLabel ?? 'タイムゾーン'}`;
+      default:
+        return '既定 (東京)';
+    }
   }
 
   private requestGeolocation(): Promise<string> {
@@ -203,7 +225,7 @@ export class App {
         (pos) => {
           this.settings.latDeg = Math.round(pos.coords.latitude * 1e4) / 1e4;
           this.settings.lonDeg = Math.round(pos.coords.longitude * 1e4) / 1e4;
-          this.settings.usedGeolocation = true;
+          this.settings.locationSource = 'geo';
           saveSettings(this.settings);
           resolve('現在地を設定しました');
         },
@@ -322,9 +344,11 @@ export class App {
     };
     this.renderer.render(params);
 
-    // --- status line (2x per second)
+    // --- status & theme (2x per second)
     if (now - this.lastStatusMs > 500) {
       this.lastStatusMs = now;
+      // The glass UI adapts to the sky: bright glass + dark ink in daylight.
+      document.body.classList.toggle('theme-day', sun.trueElevationDeg > -3);
       const d = this.simDate;
       const pad = (n: number) => String(n).padStart(2, '0');
       this.panel.setStatus({
@@ -333,6 +357,7 @@ export class App {
         sunElevDeg: sun.elevationDeg,
         twilightLabel: TWILIGHT_LABEL_JA[twilightPhase(sun.trueElevationDeg)],
         engineLabel: this.renderer.usingLut ? '多重散乱LUT' : '単一散乱RT',
+        locationLabel: this.locationLabel(),
         fps: this.fpsEma,
       });
     }

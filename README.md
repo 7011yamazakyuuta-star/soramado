@@ -30,9 +30,9 @@ npm run build    # 本番ビルド (dist/) / production build
 npm run preview  # ビルドの確認 / preview the build
 ```
 
-画面をタップまたはマウスを動かすと設定UIが3秒間表示されます。フルスクリーンボタン、時刻モード、場所、太陽ディスク/巻雲/星のトグル、視点(仰角・方位)、明るさ、画質、Wake Lockを設定できます。設定はlocalStorageに保存されます。
+起動するとデバイスのタイムゾーンから場所を推定し(許可ダイアログなし)、その土地の「いま」の空が実時間で移ろいます。画面をタップまたはマウスを動かすと、時計チップと小さなガラス調ボタン(フルスクリーン・設定)が3秒だけ現れます。歯車から開く設定パネルで、時刻モード(実時刻/手動/デモ)、場所(現在地ボタンでGPS精密測位・緯度経度手入力)、太陽ディスク/巻雲/星のトグル、視点(仰角・方位)、明るさ、画質、Wake Lockを変更できます。UIは昼は明るいガラス+濃色の文字、夜は深色ガラス+白文字に自動で切り替わります。設定はlocalStorageに保存されます。
 
-Tap the screen or move the mouse to reveal the settings UI for 3 seconds: fullscreen, time mode, location, sun-disc / cirrus / stars toggles, view direction, brightness, quality and Wake Lock. Settings persist in localStorage.
+On launch the app estimates your location from the device timezone (no permission prompt) and shows that place's sky in real time. Tapping or moving the mouse reveals a small clock chip and two glass buttons (fullscreen / settings) for 3 seconds; the gear opens a panel with time mode, location (precise GPS optional), sun-disc / cirrus / stars toggles, view direction, brightness, quality and Wake Lock. The glass UI adapts between day and night. Settings persist in localStorage.
 
 iPhone / iPad では共有メニューの「ホーム画面に追加」でフルスクリーンのPWAとして起動できます。 On iPhone/iPad, use "Add to Home Screen" for a fullscreen PWA.
 

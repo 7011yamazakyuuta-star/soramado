@@ -4,6 +4,28 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
   --safe-right: env(safe-area-inset-right, 0px);
+
+  /* Liquid-glass material, night variant (light text on smoky glass). */
+  --glass-text: rgba(238, 245, 255, 0.92);
+  --glass-text-dim: rgba(238, 245, 255, 0.6);
+  --glass-tint: rgba(150, 175, 215, 0.1);
+  --glass-edge: rgba(255, 255, 255, 0.22);
+  --glass-specular: rgba(255, 255, 255, 0.32);
+  --glass-shadow: rgba(0, 0, 0, 0.32);
+  --glass-active: rgba(255, 255, 255, 0.14);
+  --accent: #9cc0ff;
+}
+
+/* Daylight: the glass brightens and the ink darkens, like the real material. */
+body.theme-day {
+  --glass-text: rgba(16, 32, 56, 0.88);
+  --glass-text-dim: rgba(16, 32, 56, 0.58);
+  --glass-tint: rgba(255, 255, 255, 0.1);
+  --glass-edge: rgba(255, 255, 255, 0.42);
+  --glass-specular: rgba(255, 255, 255, 0.75);
+  --glass-shadow: rgba(20, 40, 80, 0.18);
+  --glass-active: rgba(255, 255, 255, 0.3);
+  --accent: #1d5fd2;
 }
 
 * {
@@ -58,174 +80,262 @@ body.idle-cursor {
   padding: 24px;
 }
 
-/* ---------- auto-hiding UI ---------- */
+/* ============================== liquid glass ============================= */
+
+.glass {
+  position: relative;
+  isolation: isolate;
+  color: var(--glass-text);
+  background:
+    linear-gradient(
+      133deg,
+      rgba(255, 255, 255, 0.14),
+      rgba(255, 255, 255, 0.03) 36%,
+      rgba(255, 255, 255, 0.01) 64%,
+      rgba(255, 255, 255, 0.09)
+    ),
+    var(--glass-tint);
+  backdrop-filter: blur(22px) saturate(1.7);
+  -webkit-backdrop-filter: blur(22px) saturate(1.7);
+  border: 1px solid var(--glass-edge);
+  box-shadow:
+    inset 0 1px 0 var(--glass-specular),
+    inset 0 -1px 1px rgba(255, 255, 255, 0.07),
+    0 6px 26px var(--glass-shadow);
+}
+
+/* Specular streak along the top edge — the "wet" highlight of the material. */
+.glass::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    radial-gradient(120% 70% at 18% -18%, rgba(255, 255, 255, 0.22), transparent 55%),
+    radial-gradient(90% 50% at 85% 115%, rgba(255, 255, 255, 0.1), transparent 60%);
+  z-index: -1;
+}
+
+/* Honour reduced-transparency accessibility settings. */
+@media (prefers-reduced-transparency: reduce) {
+  .glass {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: rgba(18, 26, 42, 0.92);
+    color: rgba(238, 245, 255, 0.92);
+  }
+}
+
+/* Browsers without backdrop-filter get a readable solid fallback. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass {
+    background: rgba(18, 26, 42, 0.88);
+    color: rgba(238, 245, 255, 0.92);
+  }
+}
+
+/* ============================ auto-hiding UI ============================= */
 
 #ui {
   position: fixed;
   inset: 0;
   pointer-events: none;
   opacity: 0;
-  transition: opacity 0.45s ease;
+  transition: opacity 0.5s ease;
   z-index: 10;
+  font-size: 13px;
 }
 
 #ui.visible {
   opacity: 1;
 }
 
-#ui.visible .panel,
+#ui.visible .chip,
 #ui.visible .topbar {
   pointer-events: auto;
 }
 
+#ui.visible.panel-open .panel {
+  pointer-events: auto;
+}
+
+/* ------ minimal ambient chrome: a small clock chip + two glass buttons --- */
+
+.chip {
+  position: absolute;
+  top: calc(12px + var(--safe-top));
+  left: calc(14px + var(--safe-left));
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 13px;
+  border-radius: 999px;
+}
+
+.chip .clock {
+  font-size: 17px;
+  font-weight: 400;
+  letter-spacing: 0.05em;
+  font-variant-numeric: tabular-nums;
+}
+
+.chip .phase {
+  font-size: 11px;
+  color: var(--glass-text-dim);
+  letter-spacing: 0.06em;
+}
+
 .topbar {
   position: absolute;
-  top: calc(10px + var(--safe-top));
-  right: calc(12px + var(--safe-right));
+  top: calc(12px + var(--safe-top));
+  right: calc(14px + var(--safe-right));
   display: flex;
   gap: 8px;
   align-items: center;
 }
 
-.statusline {
-  position: absolute;
-  top: calc(12px + var(--safe-top));
-  left: calc(14px + var(--safe-left));
-  color: rgba(235, 242, 252, 0.85);
-  font-size: 12px;
-  letter-spacing: 0.04em;
-  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.45);
-  line-height: 1.7;
+.iconbtn {
+  appearance: none;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  cursor: pointer;
+  color: var(--glass-text);
+  transition: transform 0.18s ease;
 }
 
-.statusline .clock {
-  font-size: 26px;
-  font-weight: 300;
-  font-variant-numeric: tabular-nums;
+.iconbtn:active {
+  transform: scale(0.92);
 }
+
+.iconbtn svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.9;
+}
+
+#ui.panel-open [data-el='gearBtn'] {
+  background-color: var(--glass-active);
+}
+
+/* --------------------- settings panel (opens from the gear) ------------- */
 
 .panel {
   position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: calc(14px + var(--safe-bottom));
-  width: min(560px, calc(100% - 24px - var(--safe-left) - var(--safe-right)));
-  max-height: min(62vh, 460px);
+  right: calc(14px + var(--safe-right));
+  top: calc(60px + var(--safe-top));
+  width: min(420px, calc(100% - 28px - var(--safe-left) - var(--safe-right)));
+  max-height: calc(100dvh - 90px - var(--safe-top) - var(--safe-bottom));
   overflow-y: auto;
-  border-radius: 16px;
-  padding: 14px 16px 16px;
-  color: #e8eef8;
-  background: rgba(10, 16, 28, 0.55);
-  backdrop-filter: blur(14px) saturate(1.2);
-  -webkit-backdrop-filter: blur(14px) saturate(1.2);
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.35);
-  font-size: 13px;
+  border-radius: 22px;
+  padding: 15px 17px 13px;
+  visibility: hidden;
+  opacity: 0;
+  transform: translateY(-6px) scale(0.98);
+  transform-origin: top right;
+  transition:
+    opacity 0.24s ease,
+    transform 0.24s ease,
+    visibility 0s linear 0.24s;
+}
+
+#ui.panel-open .panel {
+  visibility: visible;
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity 0.24s ease,
+    transform 0.24s ease;
 }
 
 .panel h1 {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.12em;
-  margin-bottom: 10px;
+  letter-spacing: 0.14em;
+  margin-bottom: 8px;
   display: flex;
   align-items: baseline;
   gap: 8px;
 }
 
 .panel h1 .en {
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 400;
-  letter-spacing: 0.2em;
-  opacity: 0.55;
+  letter-spacing: 0.22em;
+  color: var(--glass-text-dim);
 }
 
 .row {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin: 9px 0;
+  margin: 8px 0;
   flex-wrap: wrap;
 }
 
 .row > label.head {
-  flex: 0 0 4.5em;
-  opacity: 0.75;
+  flex: 0 0 4em;
+  color: var(--glass-text-dim);
   font-size: 12px;
 }
 
 .seg {
   display: inline-flex;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 9px;
+  border: 1px solid var(--glass-edge);
+  border-radius: 999px;
   overflow: hidden;
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .seg button {
   appearance: none;
   border: 0;
   background: transparent;
-  color: #dfe8f5;
+  color: var(--glass-text);
   font-size: 12px;
   padding: 6px 12px;
   cursor: pointer;
 }
 
 .seg button.active {
-  background: rgba(125, 170, 255, 0.28);
-  color: #fff;
+  background: var(--glass-active);
+  font-weight: 600;
 }
 
 input[type='range'] {
   flex: 1;
-  min-width: 120px;
-  accent-color: #7daaff;
+  min-width: 110px;
+  accent-color: var(--accent);
 }
 
 .value {
-  min-width: 4.5em;
+  min-width: 4.2em;
   text-align: right;
   font-variant-numeric: tabular-nums;
-  opacity: 0.85;
+  color: var(--glass-text-dim);
 }
 
 button.btn {
   appearance: none;
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  border: 1px solid var(--glass-edge);
   background: rgba(255, 255, 255, 0.07);
-  color: #e8eef8;
-  border-radius: 9px;
+  color: var(--glass-text);
+  border-radius: 999px;
   font-size: 12px;
-  padding: 7px 12px;
+  padding: 6px 13px;
   cursor: pointer;
 }
 
 button.btn:active {
-  background: rgba(255, 255, 255, 0.16);
-}
-
-.iconbtn {
-  width: 40px;
-  height: 40px;
-  display: grid;
-  place-items: center;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  background: rgba(10, 16, 28, 0.5);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  color: #e8eef8;
-  cursor: pointer;
-}
-
-.iconbtn svg {
-  width: 19px;
-  height: 19px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  background: var(--glass-active);
 }
 
 .toggle {
@@ -237,29 +347,38 @@ button.btn:active {
 }
 
 .toggle input {
-  accent-color: #7daaff;
+  accent-color: var(--accent);
   width: 15px;
   height: 15px;
 }
 
 input[type='number'] {
-  width: 7em;
+  width: 6.5em;
   background: rgba(255, 255, 255, 0.07);
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 7px;
-  color: #e8eef8;
-  padding: 5px 7px;
+  border: 1px solid var(--glass-edge);
+  border-radius: 9px;
+  color: var(--glass-text);
+  padding: 5px 8px;
   font-size: 12px;
 }
 
 .hint {
   font-size: 11px;
-  opacity: 0.55;
+  color: var(--glass-text-dim);
   line-height: 1.6;
+}
+
+.meta {
+  font-size: 10.5px;
+  color: var(--glass-text-dim);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.03em;
+  margin-top: 4px;
 }
 
 .divider {
   height: 1px;
-  background: rgba(255, 255, 255, 0.09);
-  margin: 11px 0;
+  background: var(--glass-edge);
+  opacity: 0.6;
+  margin: 10px 0;
 }

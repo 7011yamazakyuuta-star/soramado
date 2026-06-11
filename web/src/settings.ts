@@ -3,6 +3,8 @@
 export type TimeMode = 'real' | 'manual' | 'demo';
 export type QualityMode = 'auto' | 'low' | 'medium' | 'high';
 export type AzimuthMode = 'auto' | 'manual';
+/** How the current lat/lon was determined. */
+export type LocationSource = 'default' | 'tz' | 'geo' | 'manual';
 
 export interface Settings {
   timeMode: TimeMode;
@@ -10,8 +12,7 @@ export interface Settings {
   manualMinutes: number;
   latDeg: number;
   lonDeg: number;
-  /** True once the user granted geolocation (informational only). */
-  usedGeolocation: boolean;
+  locationSource: LocationSource;
   sunDisc: boolean;
   clouds: boolean;
   cloudCover: number; // 0..1
@@ -33,7 +34,7 @@ export const DEFAULT_SETTINGS: Settings = {
   manualMinutes: 12 * 60,
   latDeg: DEFAULT_LOCATION.latDeg,
   lonDeg: DEFAULT_LOCATION.lonDeg,
-  usedGeolocation: false,
+  locationSource: 'default',
   sunDisc: false, // requirement: no identifiable light source by default
   clouds: false,
   cloudCover: 0.35,
@@ -52,8 +53,14 @@ export function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { ...DEFAULT_SETTINGS };
-    const parsed = JSON.parse(raw) as Partial<Settings>;
-    return { ...DEFAULT_SETTINGS, ...parsed };
+    const parsed = JSON.parse(raw) as Partial<Settings> & { usedGeolocation?: boolean };
+    const merged: Settings = { ...DEFAULT_SETTINGS, ...parsed };
+    // Migrate pre-locationSource saves.
+    if (!parsed.locationSource) {
+      merged.locationSource = parsed.usedGeolocation ? 'geo' : 'default';
+    }
+    delete (merged as unknown as Record<string, unknown>).usedGeolocation;
+    return merged;
   } catch {
     return { ...DEFAULT_SETTINGS };
   }
