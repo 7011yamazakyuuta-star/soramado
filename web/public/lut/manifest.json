@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "radianceScale": 1.0,
+  "transmittance": {
+    "file": "transmittance.bin",
+    "width": 256,
+    "height": 64
+  },
+  "scattering": {
+    "file": "scattering.bin",
+    "muSize": 128,
+    "muSSize": 64,
+    "nuSize": 32
+  }
+}
