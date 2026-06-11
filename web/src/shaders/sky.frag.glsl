@@ -142,6 +142,18 @@ vec3 sunOpticalDepth(vec3 p, vec3 sunDir) {
     float h = length(q) - Rg;
     od += densitiesAt(h) * dt;
   }
+  // Grazing rays (sun just below the horizon of an elevated point) cross
+  // >1000 km of dense air that a 16-step march badly undersamples — which
+  // would let twilight clouds blaze under the night exposure. Floor the
+  // depth with the Chapman grazing solution sqrt(2*pi*H*R)*exp(-hp/H) at
+  // the ray's perigee: keeps the genuine afterglow reds, kills the blowup.
+  float tPer = -dot(p, sunDir);
+  if (tPer > 0.0) {
+    float hp = max(length(p + sunDir * tPer) - Rg, 0.0);
+    od.x = max(od.x, 5.83e5 * exp(-hp / Hr));
+    od.y = max(od.y, 2.19e5 * exp(-hp / Hm));
+    od.z = max(od.z, 3.5e5 * max(0.0, 1.0 - abs(hp - kOzoneCenter) / kOzoneHalfWidth));
+  }
   return od;
 }
 
