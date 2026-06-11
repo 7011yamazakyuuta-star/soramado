@@ -42,7 +42,7 @@ body {
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
-  background: #000;
+  background: #03060c;
   font-family:
     'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', system-ui,
     -apple-system, sans-serif;
@@ -53,12 +53,14 @@ body {
 }
 
 #sky {
-  /* inset:0 stretches to the real visual viewport — including under the
-     iOS home indicator in standalone PWAs, where 100dvh falls short. */
+  /* inset:0 stretches to the layout viewport; the extra safe-area-inset
+     height guarantees coverage under the iOS home indicator even in
+     standalone PWAs where the viewport stops short (overdraw is clipped
+     by the body and completely harmless). */
   position: fixed;
   inset: 0;
   width: 100%;
-  height: 100%;
+  height: calc(100% + env(safe-area-inset-bottom, 0px));
   display: block;
   background: #03060c;
 }
