@@ -17,6 +17,7 @@ export interface RenderParams {
   sunDisc: boolean;
   clouds: boolean;
   cloudCover: number;
+  haze: boolean;
   stars: boolean;
   starMat: Float32Array; // 9 elements, column-major
 }
@@ -209,6 +210,7 @@ export class SkyRenderer {
     gl.uniform1f(loc('uSunDiscOn'), p.sunDisc ? 1 : 0);
     gl.uniform1f(loc('uCloudsOn'), p.clouds ? 1 : 0);
     gl.uniform1f(loc('uCloudCover'), p.cloudCover);
+    gl.uniform1f(loc('uHazeOn'), p.haze ? 1 : 0);
     gl.uniform1f(loc('uStarsOn'), p.stars ? 1 : 0);
     gl.uniformMatrix3fv(loc('uStarMat'), false, p.starMat);
 

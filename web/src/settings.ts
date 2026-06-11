@@ -16,7 +16,11 @@ export interface Settings {
   sunDisc: boolean;
   clouds: boolean;
   cloudCover: number; // 0..1
+  /** Boundary-layer haze: subtle horizon irregularity. */
+  hazeOn: boolean;
   stars: boolean;
+  /** Device-tilt parallax (where orientation sensors exist). */
+  parallax: boolean;
   pitchDeg: number; // view elevation at screen centre
   azimuthMode: AzimuthMode;
   azimuthDeg: number; // manual view azimuth, degrees from north
@@ -36,9 +40,11 @@ export const DEFAULT_SETTINGS: Settings = {
   lonDeg: DEFAULT_LOCATION.lonDeg,
   locationSource: 'default',
   sunDisc: false, // requirement: no identifiable light source by default
-  clouds: false,
+  clouds: true,
   cloudCover: 0.35,
+  hazeOn: true,
   stars: true,
+  parallax: true,
   pitchDeg: 32,
   azimuthMode: 'auto',
   azimuthDeg: 0,

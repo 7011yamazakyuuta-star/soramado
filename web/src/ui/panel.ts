@@ -7,6 +7,8 @@ export interface PanelHooks {
   onTimeModeChanged(prev: TimeMode): void;
   /** Ask for the device location; resolves to a user-facing status string. */
   requestGeolocation(): Promise<string>;
+  /** iOS needs a user-gesture permission for tilt parallax. */
+  requestParallaxPermission(): void;
   toggleFullscreen(): void;
 }
 
@@ -87,8 +89,10 @@ export class Panel {
         <div class="row">
           <label class="head">表示</label>
           <label class="toggle"><input type="checkbox" data-el="sunDisc" />太陽ディスク</label>
-          <label class="toggle"><input type="checkbox" data-el="clouds" />巻雲</label>
+          <label class="toggle"><input type="checkbox" data-el="clouds" />雲</label>
+          <label class="toggle"><input type="checkbox" data-el="hazeOn" />霞</label>
           <label class="toggle"><input type="checkbox" data-el="stars" />星空</label>
+          <label class="toggle" data-el="parallaxRow"><input type="checkbox" data-el="parallax" />視差(傾き)</label>
         </div>
 
         <div class="row" data-el="cloudRow">
@@ -201,17 +205,23 @@ export class Panel {
     lonInput.addEventListener('change', onLatLon);
 
     // --- display toggles
-    const bindToggle = (key: 'sunDisc' | 'clouds' | 'stars' | 'wakeLock') => {
+    const bindToggle = (
+      key: 'sunDisc' | 'clouds' | 'hazeOn' | 'stars' | 'parallax' | 'wakeLock',
+    ) => {
       const input = this.els[key] as HTMLInputElement;
       input.addEventListener('change', () => {
         this.settings[key] = input.checked;
+        if (key === 'parallax' && input.checked) this.hooks.requestParallaxPermission();
         this.changed();
       });
     };
     bindToggle('sunDisc');
     bindToggle('clouds');
+    bindToggle('hazeOn');
     bindToggle('stars');
+    bindToggle('parallax');
     bindToggle('wakeLock');
+    if (!('DeviceOrientationEvent' in window)) this.els.parallaxRow.hidden = true;
 
     // --- sliders
     const bindRange = (
@@ -275,7 +285,9 @@ export class Panel {
 
     (this.els.sunDisc as HTMLInputElement).checked = s.sunDisc;
     (this.els.clouds as HTMLInputElement).checked = s.clouds;
+    (this.els.hazeOn as HTMLInputElement).checked = s.hazeOn;
     (this.els.stars as HTMLInputElement).checked = s.stars;
+    (this.els.parallax as HTMLInputElement).checked = s.parallax;
     (this.els.wakeLock as HTMLInputElement).checked = s.wakeLock;
 
     this.els.cloudRow.style.display = s.clouds ? '' : 'none';

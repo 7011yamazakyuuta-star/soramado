@@ -136,6 +136,11 @@ export class App {
   private reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
   private simDate = new Date();
   private tzZoneLabel: string | null = null;
+  // Device-tilt parallax: a real depth cue on handhelds. The baseline drifts
+  // slowly toward the current posture, so any holding angle becomes neutral.
+  private tiltBase: { b: number; g: number } | null = null;
+  private tiltTarget: [number, number] = [0, 0];
+  private tiltCur: [number, number] = [0, 0];
 
   start(): void {
     this.canvas = document.getElementById('sky') as HTMLCanvasElement;
@@ -158,6 +163,7 @@ export class App {
         }
       },
       requestGeolocation: () => this.requestGeolocation(),
+      requestParallaxPermission: () => this.requestParallaxPermission(),
       toggleFullscreen: () => {
         if (document.fullscreenElement) void document.exitFullscreen();
         else void document.documentElement.requestFullscreen({ navigationUI: 'hide' });
@@ -174,6 +180,7 @@ export class App {
 
     void this.wakeLock.setEnabled(this.settings.wakeLock);
     this.resolveLocation();
+    this.setupParallax();
 
     // Optional precomputed multiple-scattering LUTs (Phase 2 artefacts).
     void loadSkySource().then((src) => {
@@ -199,6 +206,33 @@ export class App {
       this.settings.locationSource = 'tz';
       saveSettings(this.settings);
       this.panel.refreshFromSettings();
+    }
+  }
+
+  // ------------------------------------------------------------ parallax
+  private setupParallax(): void {
+    if (this.reducedMotion || !('DeviceOrientationEvent' in window)) return;
+    window.addEventListener('deviceorientation', (e: DeviceOrientationEvent) => {
+      if (!this.settings.parallax || e.beta == null || e.gamma == null) return;
+      if (!this.tiltBase) this.tiltBase = { b: e.beta, g: e.gamma };
+      const base = this.tiltBase;
+      base.b += (e.beta - base.b) * 0.004;
+      base.g += (e.gamma - base.g) * 0.004;
+      const db = Math.max(-20, Math.min(20, e.beta - base.b));
+      const dg = Math.max(-20, Math.min(20, e.gamma - base.g));
+      this.tiltTarget = [(dg / 20) * 1.4, (db / 20) * -1.0]; // deg: yaw, pitch
+    });
+  }
+
+  /** iOS 13+ requires a user-gesture permission for orientation events. */
+  private requestParallaxPermission(): void {
+    const D = DeviceOrientationEvent as unknown as {
+      requestPermission?: () => Promise<string>;
+    };
+    if (typeof D.requestPermission === 'function') {
+      void D.requestPermission().catch(() => {
+        /* denied — parallax simply stays inactive */
+      });
     }
   }
 
@@ -287,6 +321,13 @@ export class App {
         0.05 * Math.sin((tSec / 167) * 2 * Math.PI + 2.1);
     }
 
+    // --- device-tilt parallax (smoothed)
+    const k = Math.min(1, dtMs / 250);
+    this.tiltCur[0] += (this.tiltTarget[0] - this.tiltCur[0]) * k;
+    this.tiltCur[1] += (this.tiltTarget[1] - this.tiltCur[1]) * k;
+    yawDeg += this.tiltCur[0];
+    pitchDeg += this.tiltCur[1];
+
     // --- camera basis (columns: right, up, forward)
     const fwd = dirFromAzEl(yawDeg, pitchDeg);
     const upW = [0, 1, 0];
@@ -339,6 +380,7 @@ export class App {
       sunDisc: s.sunDisc,
       clouds: s.clouds,
       cloudCover: s.cloudCover,
+      haze: s.hazeOn,
       stars: s.stars,
       starMat,
     };

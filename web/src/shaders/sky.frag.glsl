@@ -35,8 +35,9 @@ uniform int uSamples;         // view-ray march steps (quality scaled)
 uniform int uLightSamples;    // sun-ray march steps
 
 uniform float uSunDiscOn;     // 0/1 (default 0: no identifiable light source)
-uniform float uCloudsOn;      // 0/1 thin cirrus layer
+uniform float uCloudsOn;      // 0/1 layered cloud system
 uniform float uCloudCover;    // 0..1
+uniform float uHazeOn;        // 0/1 boundary-layer haze
 uniform float uStarsOn;       // 0/1
 uniform mat3 uStarMat;        // horizon frame -> sky-fixed equatorial frame
 
@@ -260,70 +261,118 @@ vec3 airglow(vec3 rd) {
   return vec3(0.9, 1.8, 1.3) * 0.5e-6 * vr;
 }
 
-// ---------------------------------------------------------------- cirrus
-float vnoise(vec2 p) {
-  vec2 i = floor(p);
-  vec2 f = fract(p);
-  vec2 u = f * f * (3.0 - 2.0 * f);
-  float a = hash13(vec3(i, 13.7));
-  float b = hash13(vec3(i + vec2(1, 0), 13.7));
-  float c = hash13(vec3(i + vec2(0, 1), 13.7));
-  float d = hash13(vec3(i + vec2(1, 1), 13.7));
-  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+// ---------------------------------------------------------------- clouds
+// Display-only realism budget: a true fluid simulation is out of reach at
+// 60 fps on phones, so we reproduce the *physical structure* instead —
+//  - sheets live at real altitudes and advect with realistic layer winds;
+//    two layers moving at different angular speeds give motion parallax
+//  - cirrus fibres are stretched along the wind (shear anisotropy)
+//  - shapes genuinely evolve: the noise field has a slow time dimension
+//  - lighting is exact: the same ray-marched transmittance as the sky,
+//    so sheets redden at sunset and keep catching afterglow while the
+//    ground below is already inside the Earth's shadow.
+
+float vnoise3(vec3 p) {
+  vec3 i = floor(p);
+  vec3 f = fract(p);
+  vec3 u = f * f * (3.0 - 2.0 * f);
+  float n000 = hash13(i);
+  float n100 = hash13(i + vec3(1, 0, 0));
+  float n010 = hash13(i + vec3(0, 1, 0));
+  float n110 = hash13(i + vec3(1, 1, 0));
+  float n001 = hash13(i + vec3(0, 0, 1));
+  float n101 = hash13(i + vec3(1, 0, 1));
+  float n011 = hash13(i + vec3(0, 1, 1));
+  float n111 = hash13(i + vec3(1, 1, 1));
+  return mix(
+    mix(mix(n000, n100, u.x), mix(n010, n110, u.x), u.y),
+    mix(mix(n001, n101, u.x), mix(n011, n111, u.x), u.y),
+    u.z);
 }
 
-float fbm(vec2 p) {
+// Turbulence-like spectrum: 5 octaves, rotated between octaves.
+float fbm3(vec3 p) {
   float v = 0.0;
   float amp = 0.5;
-  mat2 rot = mat2(0.8, 0.6, -0.6, 0.8);
   for (int i = 0; i < 5; i++) {
-    v += amp * vnoise(p);
-    p = rot * p * 2.13;
+    v += amp * vnoise3(p);
+    p = vec3(0.8 * p.x + 0.6 * p.y, -0.6 * p.x + 0.8 * p.y, p.z + 9.7) * 2.13;
     amp *= 0.5;
   }
   return v;
 }
 
-// Kasten–Young relative air mass (cheap sun transmittance for the cloud
-// layer only; the sky itself uses the full ray march).
-float airMass(float cosZenith) {
-  float zDeg = degrees(acos(clamp(cosZenith, -1.0, 1.0)));
-  if (zDeg > 95.0) return 40.0;
-  return 1.0 / (cosZenith + 0.50572 * pow(96.07995 - zDeg, -1.6364));
+float fbm3lo(vec3 p) {
+  float v = 0.0;
+  float amp = 0.5;
+  for (int i = 0; i < 3; i++) {
+    v += amp * vnoise3(p);
+    p = vec3(0.8 * p.x + 0.6 * p.y, -0.6 * p.x + 0.8 * p.y, p.z + 9.7) * 2.13;
+    amp *= 0.5;
+  }
+  return v;
 }
 
-vec3 sunTransmittanceAnalytic(float h, float cosZenith) {
-  float am = airMass(cosZenith);
-  vec3 vertical =
-    uBetaR * (Hr * exp(-h / Hr)) +
-    vec3(kMieExtinction) * (Hm * exp(-h / Hm)) +
-    kBetaOzone * (kOzoneHalfWidth * max(0.0, 1.0 - abs(h - kOzoneCenter) / kOzoneHalfWidth + 0.35));
-  return exp(-vertical * am);
-}
-
-// Thin cirrus sheet at ~8 km. Returns (rgb radiance, alpha).
-vec4 cirrus(vec3 ro, vec3 rd, vec3 sunDir) {
-  float t = raySphereFar(ro, rd, Rg + 8000.0);
+// One thin cloud sheet.
+//   alt       sheet altitude [m]
+//   featureKm dominant feature size [km]
+//   windDir/windSpd  layer wind (real m/s; drives both drift and fibres)
+//   stretch   anisotropy along the wind (cirrus uncinus combing)
+//   morphRate evolution speed of the shapes themselves
+vec4 cloudLayer(vec3 ro, vec3 rd, vec3 skyAmbient, vec3 sunDir,
+                float alt, float featureKm, vec2 windDir, float windSpd,
+                float stretch, float morphRate, float sharp, float opacity) {
+  float t = raySphereFar(ro, rd, Rg + alt);
   if (t <= 0.0) return vec4(0.0);
-  vec3 p = ro + rd * t;
-  // ~7 km cloud features (real cirrus scale) with finer FBM detail below.
-  vec2 uv = p.xz * (1.0 / 30.0e3);
-  uv += uTime * vec2(2.0e-4, 0.75e-4); // ~6 m/s wind drift
+  vec3 pc = ro + rd * t;
 
-  float n = fbm(uv * 4.0 + 1.7 * fbm(uv * 7.0)); // domain-warped FBM
-  float cover = mix(0.72, 0.42, uCloudCover);
-  float dens = smoothstep(cover, cover + 0.28, n);
+  // Wind-aligned coordinates [km]; advect, then stretch fibres along wind.
+  vec2 w = normalize(windDir);
+  vec2 q = vec2(dot(pc.xz, w), dot(pc.xz, vec2(-w.y, w.x))) * 1e-3;
+  q.x -= windSpd * uTime * 1e-3;
+  q.x /= stretch;
 
-  // Fade near the horizon (long slant path) for a natural thinning.
-  float horizonFade = smoothstep(0.02, 0.12, rd.y);
-  dens *= horizonFade * 0.55;
-  if (dens <= 0.0001) return vec4(0.0);
+  // Slowly morphing, domain-warped turbulence.
+  vec3 np = vec3(q / featureKm, uTime * morphRate);
+  vec2 warp = vec2(fbm3lo(np * 2.6 + 7.3), fbm3lo(np * 2.6 - 3.1)) - vec2(0.5);
+  float n = fbm3(np + vec3(warp * 0.6, 0.0));
 
-  vec3 sunT = sunTransmittanceAnalytic(8000.0, sunDir.y);
+  float cover = mix(0.70, 0.42, uCloudCover);
+  float d = smoothstep(cover, cover + 0.30, n);
+  d = pow(d, sharp);
+  d *= smoothstep(0.015, 0.06, rd.y); // stay clear of the horizon clamp band
+  if (d <= 0.002) return vec4(0.0);
+
+  // Exact sun transmittance at the cloud point (same ray march as the sky):
+  // handles reddening AND the Earth's shadow, so high sheets keep glowing
+  // after ground sunset (afterglow) and go dark when the shadow climbs.
+  vec3 sunT = extinctionFromOd(sunOpticalDepth(pc, sunDir));
   float mu = dot(rd, sunDir);
-  float ph = mix(phaseMieHG(mu, 0.55), 1.0 / (4.0 * PI), 0.35);
-  vec3 light = uSunIrradiance * sunT * ph * 2.4;
-  return vec4(light, dens);
+  // Dual-lobe phase: strong forward silver lining + slight back scatter.
+  float ph = 0.72 * phaseMieHG(mu, 0.62) + 0.28 * phaseMieHG(mu, -0.18);
+  // Powder term: optically thin edges stay translucent, cores fill in.
+  float powder = 1.0 - exp(-3.5 * d);
+  vec3 light = uSunIrradiance * sunT * ph * 2.6 * (0.55 + 0.45 * powder)
+             + skyAmbient * 0.85;
+  return vec4(light, d * opacity);
+}
+
+// Boundary-layer haze (~1.6 km): a faintly irregular veil that hugs the
+// horizon. Its slow unevenness removes the sterile, mathematically perfect
+// gradient that reads as "computer graphics".
+vec4 hazeLayer(vec3 ro, vec3 rd, vec3 skyAmbient, vec3 sunDir) {
+  float t = raySphereFar(ro, rd, Rg + 1600.0);
+  if (t <= 0.0) return vec4(0.0);
+  vec3 pc = ro + rd * t;
+  vec2 q = (pc.xz - vec2(4.0, 1.5) * uTime) * 1e-3;
+  float n = fbm3lo(vec3(q * (1.0 / 14.0), uTime * 0.0012));
+  float band = exp(-max(rd.y, 0.0) * 11.0);
+  float a = 0.14 * band * smoothstep(0.2, 0.8, n + 0.25);
+  if (a <= 0.002) return vec4(0.0);
+  vec3 sunT = extinctionFromOd(sunOpticalDepth(pc, sunDir));
+  float mu = dot(rd, sunDir);
+  vec3 light = uSunIrradiance * sunT * phaseMieHG(mu, 0.5) * 1.3 + skyAmbient * 0.9;
+  return vec4(light, a);
 }
 
 // ------------------------------------------------------------- tone map
@@ -387,10 +436,21 @@ void main() {
     }
   }
 
-  // ----- thin cirrus (optional)
+  // ----- clouds & haze, far to near (relative drift = motion parallax)
   if (uCloudsOn > 0.5) {
-    vec4 cl = cirrus(ro, rd, sunDir);
-    sky = mix(sky, cl.rgb, cl.a * 0.85);
+    // Cirrus at 10.5 km: long fibres combed by a ~26 m/s jet-level wind.
+    vec4 ch = cloudLayer(ro, rd, sky, sunDir,
+                         10500.0, 7.0, vec2(0.92, 0.25), 26.0, 4.5, 0.0022, 1.6, 0.5);
+    sky = mix(sky, ch.rgb, ch.a);
+    // Mid-level sheet at 4 km: smaller puffs, different wind direction;
+    // being closer it sweeps by faster, which is what sells the depth.
+    vec4 cm = cloudLayer(ro, rd, sky, sunDir,
+                         4000.0, 2.6, vec2(0.5, 0.6), 11.0, 1.3, 0.005, 1.2, 0.62);
+    sky = mix(sky, cm.rgb, cm.a);
+  }
+  if (uHazeOn > 0.5) {
+    vec4 hz = hazeLayer(ro, rd, sky, sunDir);
+    sky = mix(sky, hz.rgb, hz.a);
   }
 
   // ----- HDR -> display
