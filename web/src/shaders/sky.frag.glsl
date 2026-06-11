@@ -306,12 +306,13 @@ vec4 cirrus(vec3 ro, vec3 rd, vec3 sunDir) {
   float t = raySphereFar(ro, rd, Rg + 8000.0);
   if (t <= 0.0) return vec4(0.0);
   vec3 p = ro + rd * t;
-  vec2 uv = p.xz * (1.0 / 250.0e3);
-  uv += uTime * vec2(2.4e-5, 0.9e-5); // slow wind drift
+  // ~7 km cloud features (real cirrus scale) with finer FBM detail below.
+  vec2 uv = p.xz * (1.0 / 30.0e3);
+  uv += uTime * vec2(2.0e-4, 0.75e-4); // ~6 m/s wind drift
 
   float n = fbm(uv * 4.0 + 1.7 * fbm(uv * 7.0)); // domain-warped FBM
-  float cover = mix(0.78, 0.45, uCloudCover);
-  float dens = smoothstep(cover, cover + 0.32, n);
+  float cover = mix(0.72, 0.42, uCloudCover);
+  float dens = smoothstep(cover, cover + 0.28, n);
 
   // Fade near the horizon (long slant path) for a natural thinning.
   float horizonFade = smoothstep(0.02, 0.12, rd.y);

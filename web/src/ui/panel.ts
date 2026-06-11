@@ -304,13 +304,15 @@ export class Panel {
     for (const ev of ['pointermove', 'pointerdown', 'keydown', 'touchstart'] as const) {
       window.addEventListener(ev, show, { passive: true });
     }
-    // Keep visible while a control inside the panel has focus.
-    this.root.addEventListener('focusin', () => window.clearTimeout(this.hideTimer));
-    this.root.addEventListener('focusout', show);
+    // Slider drags and text edits also count as activity.
+    this.root.addEventListener('input', show);
   }
 
   private hide(): void {
-    if (this.root.querySelector(':focus')) return; // editing — stay visible
+    // Drop focus left behind by a click so the panel can fade; any new
+    // keystroke or pointer movement brings it straight back.
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && this.root.contains(active)) active.blur();
     this.root.classList.remove('visible');
     this.root.setAttribute('aria-hidden', 'true');
     document.body.classList.add('idle-cursor');
