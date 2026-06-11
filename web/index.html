@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <meta
+      name="description"
+      content="ディスプレイを空への窓に。物理ベースの大気散乱(レイリー散乱・ミー散乱)をリアルタイム描画するオープンソースの空レンダラー。 An independent open-source sky renderer based on physical atmospheric scattering."
+    />
+    <meta name="theme-color" content="#0b2a5e" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="空窓" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <title>空窓 soramado — 空への窓</title>
+  </head>
+  <body>
+    <canvas id="sky"></canvas>
+    <div id="ui" aria-hidden="true"></div>
+    <div id="fallback" hidden>
+      <p>
+        このアプリには WebGL2 対応ブラウザが必要です。<br />
+        This app requires a browser with WebGL2 support.
+      </p>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
