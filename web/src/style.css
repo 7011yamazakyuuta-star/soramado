@@ -53,12 +53,14 @@ body {
 }
 
 #sky {
+  /* inset:0 stretches to the real visual viewport — including under the
+     iOS home indicator in standalone PWAs, where 100dvh falls short. */
   position: fixed;
   inset: 0;
   width: 100%;
-  height: 100vh;
-  height: 100dvh;
+  height: 100%;
   display: block;
+  background: #03060c;
 }
 
 body.idle-cursor {

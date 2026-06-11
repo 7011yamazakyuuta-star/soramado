@@ -446,16 +446,38 @@ export class Panel {
     }
     // Slider drags and text edits also count as activity.
     this.root.addEventListener('input', show);
+
+    // Tapping the sky (outside the panel and buttons) closes an open panel.
+    window.addEventListener('pointerdown', (e) => {
+      if (!this.root.classList.contains('panel-open')) return;
+      const t = e.target;
+      if (
+        t instanceof Node &&
+        (this.els.panel.contains(t) || this.els.gearBtn.contains(t) || this.els.fsBtn.contains(t))
+      ) {
+        return;
+      }
+      this.closePanel();
+    });
+  }
+
+  private closePanel(): void {
+    this.root.classList.remove('panel-open');
+    this.els.gearBtn.setAttribute('aria-expanded', 'false');
   }
 
   private hide(): void {
+    // The settings panel never auto-hides while open: it waits for the gear
+    // or a tap on the sky. Idle fading only applies to the ambient chrome.
+    if (this.root.classList.contains('panel-open')) {
+      this.hideTimer = window.setTimeout(() => this.hide(), SHOW_MS);
+      return;
+    }
     // Drop focus left behind by a click so the panel can fade; any new
     // keystroke or pointer movement brings it straight back.
     const active = document.activeElement;
     if (active instanceof HTMLElement && this.root.contains(active)) active.blur();
     this.root.classList.remove('visible');
-    this.root.classList.remove('panel-open');
-    this.els.gearBtn.setAttribute('aria-expanded', 'false');
     this.root.setAttribute('aria-hidden', 'true');
     document.body.classList.add('idle-cursor');
   }
