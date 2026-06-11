@@ -362,6 +362,24 @@ input[type='number'] {
   font-size: 12px;
 }
 
+select {
+  appearance: none;
+  flex: 1;
+  min-width: 150px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--glass-edge);
+  border-radius: 9px;
+  color: var(--glass-text);
+  padding: 6px 9px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+select option {
+  color: #1a2436;
+  background: #eef2f8;
+}
+
 .hint {
   font-size: 11px;
   color: var(--glass-text-dim);

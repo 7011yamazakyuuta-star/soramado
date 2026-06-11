@@ -4,7 +4,7 @@ export type TimeMode = 'real' | 'manual' | 'demo';
 export type QualityMode = 'auto' | 'low' | 'medium' | 'high';
 export type AzimuthMode = 'auto' | 'manual';
 /** How the current lat/lon was determined. */
-export type LocationSource = 'default' | 'tz' | 'geo' | 'manual';
+export type LocationSource = 'default' | 'tz' | 'geo' | 'manual' | 'city';
 
 export interface Settings {
   timeMode: TimeMode;
@@ -13,12 +13,20 @@ export interface Settings {
   latDeg: number;
   lonDeg: number;
   locationSource: LocationSource;
+  /** City preset name (locationSource === 'city'). */
+  placeName: string | null;
+  /** IANA timezone for the clock display (city presets). */
+  displayTz: string | null;
   sunDisc: boolean;
   clouds: boolean;
   cloudCover: number; // 0..1
   /** Boundary-layer haze: subtle horizon irregularity. */
   hazeOn: boolean;
   stars: boolean;
+  /** Moon disc + moonlit sky. */
+  moon: boolean;
+  /** Aurora (auto-gated by geomagnetic latitude; visible at polar presets). */
+  aurora: boolean;
   /** Device-tilt parallax (where orientation sensors exist). */
   parallax: boolean;
   pitchDeg: number; // view elevation at screen centre
@@ -39,11 +47,15 @@ export const DEFAULT_SETTINGS: Settings = {
   latDeg: DEFAULT_LOCATION.latDeg,
   lonDeg: DEFAULT_LOCATION.lonDeg,
   locationSource: 'default',
+  placeName: null,
+  displayTz: null,
   sunDisc: false, // requirement: no identifiable light source by default
   clouds: true,
   cloudCover: 0.35,
   hazeOn: true,
   stars: true,
+  moon: true,
+  aurora: true,
   parallax: true,
   pitchDeg: 32,
   azimuthMode: 'auto',

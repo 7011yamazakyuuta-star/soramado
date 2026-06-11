@@ -1,6 +1,9 @@
 import vertSrc from '../shaders/sky.vert.glsl?raw';
 import fragSrc from '../shaders/sky.frag.glsl?raw';
+import starsVertSrc from '../shaders/stars.vert.glsl?raw';
+import starsFragSrc from '../shaders/stars.frag.glsl?raw';
 import { BLUE_NOISE_SIZE, generateBlueNoise } from './bluenoise';
+import { BRIGHT_STARS } from '../sky/brightstars';
 import type { SkyLut } from '../atmosphere/lut';
 
 export interface RenderParams {
@@ -20,6 +23,13 @@ export interface RenderParams {
   haze: boolean;
   stars: boolean;
   starMat: Float32Array; // 9 elements, column-major
+  moonDir: [number, number, number];
+  /** Moonlight irradiance, already phase- and twilight-gated (0 in daylight). */
+  moonIrr: [number, number, number];
+  moonDisc: boolean;
+  moonAngularRadius: number;
+  /** 0..1, geomagnetic-latitude & night gated. */
+  auroraStrength: number;
 }
 
 function compileShader(gl: WebGL2RenderingContext, type: number, src: string): WebGLShader {
@@ -79,6 +89,9 @@ export class SkyRenderer {
   private scatTex: WebGLTexture | null = null;
   private lut: SkyLut | null = null;
   private vao: WebGLVertexArrayObject;
+  private starProgram: ProgramInfo;
+  private starVao: WebGLVertexArrayObject;
+  private starCount: number;
 
   constructor(private canvas: HTMLCanvasElement) {
     const gl = canvas.getContext('webgl2', {
@@ -96,6 +109,46 @@ export class SkyRenderer {
     const vao = gl.createVertexArray();
     if (!vao) throw new Error('createVertexArray failed');
     this.vao = vao;
+
+    // --- catalogue star point pass (real constellations) ---
+    const header = '#version 300 es\nprecision highp float;\n';
+    const starProg = linkProgram(gl, header + starsVertSrc, header + starsFragSrc);
+    const starUniforms = new Map<string, WebGLUniformLocation>();
+    const nU = gl.getProgramParameter(starProg, gl.ACTIVE_UNIFORMS) as number;
+    for (let i = 0; i < nU; i++) {
+      const info = gl.getActiveUniform(starProg, i);
+      const l = info && gl.getUniformLocation(starProg, info.name);
+      if (info && l) starUniforms.set(info.name, l);
+    }
+    this.starProgram = { program: starProg, uniforms: starUniforms };
+
+    // Sky-fixed equatorial frame convention (matches uStarMat, verified):
+    // eqDir = (cos d cos a, -cos d sin a, sin d) for RA a, Dec d.
+    const RAD = Math.PI / 180;
+    this.starCount = BRIGHT_STARS.length;
+    const starData = new Float32Array(this.starCount * 4);
+    BRIGHT_STARS.forEach(([raDeg, decDeg, mag], i) => {
+      const ra = raDeg * RAD;
+      const dec = decDeg * RAD;
+      starData[i * 4 + 0] = Math.cos(dec) * Math.cos(ra);
+      starData[i * 4 + 1] = -Math.cos(dec) * Math.sin(ra);
+      starData[i * 4 + 2] = Math.sin(dec);
+      starData[i * 4 + 3] = mag;
+    });
+    const starVao = gl.createVertexArray();
+    const starBuf = gl.createBuffer();
+    if (!starVao || !starBuf) throw new Error('star buffer alloc failed');
+    this.starVao = starVao;
+    gl.bindVertexArray(starVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, starBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, starData, gl.STATIC_DRAW);
+    const aEqDir = gl.getAttribLocation(starProg, 'aEqDir');
+    const aMag = gl.getAttribLocation(starProg, 'aMag');
+    gl.enableVertexAttribArray(aEqDir);
+    gl.vertexAttribPointer(aEqDir, 3, gl.FLOAT, false, 16, 0);
+    gl.enableVertexAttribArray(aMag);
+    gl.vertexAttribPointer(aMag, 1, gl.FLOAT, false, 16, 12);
+    gl.bindVertexArray(null);
 
     // Blue-noise dither mask (generated procedurally, cached).
     const noise = generateBlueNoise();
@@ -213,6 +266,11 @@ export class SkyRenderer {
     gl.uniform1f(loc('uHazeOn'), p.haze ? 1 : 0);
     gl.uniform1f(loc('uStarsOn'), p.stars ? 1 : 0);
     gl.uniformMatrix3fv(loc('uStarMat'), false, p.starMat);
+    gl.uniform3f(loc('uMoonDir'), ...p.moonDir);
+    gl.uniform3f(loc('uMoonIrr'), ...p.moonIrr);
+    gl.uniform1f(loc('uMoonDiscOn'), p.moonDisc ? 1 : 0);
+    gl.uniform1f(loc('uMoonAngularRadius'), p.moonAngularRadius);
+    gl.uniform1f(loc('uAuroraStrength'), p.auroraStrength);
 
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.blueNoiseTex);
@@ -232,5 +290,25 @@ export class SkyRenderer {
     }
 
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    // Catalogue stars: additive points over the sky pass.
+    if (p.stars) {
+      const sp = this.starProgram;
+      const su = (name: string) => sp.uniforms.get(name) ?? null;
+      gl.useProgram(sp.program);
+      gl.bindVertexArray(this.starVao);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.ONE, gl.ONE);
+      gl.uniformMatrix3fv(su('uStarMat'), false, p.starMat);
+      gl.uniformMatrix3fv(su('uCamBasis'), false, p.camBasis);
+      gl.uniform2f(su('uResolution'), this.canvas.width, this.canvas.height);
+      gl.uniform1f(su('uTanHalfFov'), p.tanHalfFov);
+      gl.uniform3f(su('uBetaR'), ...p.betaR);
+      gl.uniform1f(su('uTime'), p.timeSec);
+      gl.uniform1f(su('uExposure'), p.exposure);
+      gl.drawArrays(gl.POINTS, 0, this.starCount);
+      gl.disable(gl.BLEND);
+      gl.bindVertexArray(this.vao);
+    }
   }
 }
