@@ -19,7 +19,10 @@ out vec4 outColor;
 
 // ---------------------------------------------------------------- uniforms
 uniform vec2 uResolution;
-uniform float uTime;          // seconds since app start (drift/twinkle/clouds)
+uniform float uTime;          // wall seconds (twinkle/shimmer/drift)
+uniform float uCloudTime;     // weather seconds: simulation-time driven, so
+                              // demo mode shows a timelapse and the manual
+                              // slider scrubs the cloud field too
 uniform ivec2 uNoiseOffset;   // temporal blue-noise offset
 uniform sampler2D uBlueNoise; // 64x64 R8 blue noise, tiled
 
@@ -360,15 +363,19 @@ vec4 cloudLayer(vec3 ro, vec3 rd, vec3 skyAmbient, vec3 sunDir,
   // Wind-aligned coordinates [km]; advect, then stretch fibres along wind.
   vec2 w = normalize(windDir);
   vec2 q = vec2(dot(pc.xz, w), dot(pc.xz, vec2(-w.y, w.x))) * 1e-3;
-  q.x -= windSpd * uTime * 1e-3;
+  q.x -= windSpd * uCloudTime * 1e-3;
   q.x /= stretch;
 
   // Slowly morphing, domain-warped turbulence.
-  vec3 np = vec3(q / featureKm, uTime * morphRate);
+  vec3 np = vec3(q / featureKm, uCloudTime * morphRate);
   vec2 warp = vec2(fbm3lo(np * 2.6 + 7.3), fbm3lo(np * 2.6 - 3.1)) - vec2(0.5);
   float n = fbm3(np + vec3(warp * 0.6, 0.0));
 
-  float cover = mix(0.70, 0.42, uCloudCover);
+  // Weather evolution: a synoptic-scale coverage field rides the same wind,
+  // so fronts genuinely arrive, thicken and clear instead of one frozen
+  // pattern fading at dusk.
+  float synoptic = fbm3lo(vec3(q / 220.0, uCloudTime * 1.2e-4 + 31.7));
+  float cover = mix(0.74, 0.40, uCloudCover) + 0.45 * (synoptic - 0.5);
   float d = smoothstep(cover, cover + 0.30, n);
   d = pow(d, sharp);
   d *= smoothstep(0.015, 0.06, rd.y); // stay clear of the horizon clamp band
@@ -413,9 +420,9 @@ vec3 aurora(vec3 ro, vec3 rd) {
     vec2 q = (ro + rd * t).xz * 1.0e-3; // km at emission altitude
 
     // Folded curtain coordinate: slow large-scale waving + drifting folds.
-    float wave = 0.8 * fbm3lo(vec3(q * 0.004, uTime * 0.013));
+    float wave = 0.8 * fbm3lo(vec3(q * 0.004, uCloudTime * 0.013));
     float u = q.y * 0.016 + wave; // sheets run roughly east-west
-    float ribbon = fbm3lo(vec3(u * 2.2, u * 0.35 + 11.0, uTime * 0.045));
+    float ribbon = fbm3lo(vec3(u * 2.2, u * 0.35 + 11.0, uCloudTime * 0.045));
     float curtain = pow(smoothstep(0.45, 0.85, ribbon), 2.2);
 
     // Vertical striations (fast shimmer along the sheet).
@@ -446,8 +453,8 @@ vec4 hazeLayer(vec3 ro, vec3 rd, vec3 skyAmbient, vec3 sunDir) {
   float t = raySphereFar(ro, rd, Rg + 1600.0);
   if (t <= 0.0) return vec4(0.0);
   vec3 pc = ro + rd * t;
-  vec2 q = (pc.xz - vec2(4.0, 1.5) * uTime) * 1e-3;
-  float n = fbm3lo(vec3(q * (1.0 / 14.0), uTime * 0.0012));
+  vec2 q = (pc.xz - vec2(4.0, 1.5) * uCloudTime) * 1e-3;
+  float n = fbm3lo(vec3(q * (1.0 / 14.0), uCloudTime * 0.0012));
   float band = exp(-max(rd.y, 0.0) * 11.0);
   float a = 0.14 * band * smoothstep(0.2, 0.8, n + 0.25);
   if (a <= 0.002) return vec4(0.0);

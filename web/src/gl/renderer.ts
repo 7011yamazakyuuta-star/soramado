@@ -8,6 +8,8 @@ import type { SkyLut } from '../atmosphere/lut';
 
 export interface RenderParams {
   timeSec: number;
+  /** Weather clock [s]: follows *simulation* time (capped timelapse in demo). */
+  cloudTimeSec: number;
   frame: number;
   camBasis: Float32Array; // 9 elements, columns: right, up, forward
   tanHalfFov: number;
@@ -246,6 +248,7 @@ export class SkyRenderer {
 
     gl.uniform2f(loc('uResolution'), this.canvas.width, this.canvas.height);
     gl.uniform1f(loc('uTime'), p.timeSec);
+    gl.uniform1f(loc('uCloudTime'), p.cloudTimeSec);
 
     // Temporal blue-noise offset: R2 low-discrepancy sequence.
     const ox = Math.floor((p.frame * 0.7548776662) % 1 * BLUE_NOISE_SIZE);

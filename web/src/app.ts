@@ -145,6 +145,11 @@ export class App {
   private tiltCur: [number, number] = [0, 0];
   /** Fixed simulation instant from the ?t= URL param (testing/demos). */
   private overrideDate: Date | null = null;
+  /** Weather clock [s]: follows simulation time so demo mode is a cloud
+   *  timelapse and the manual slider scrubs the sky; capped at 40x so the
+   *  pattern streams instead of strobing. */
+  private cloudTimeSec = 0;
+  private prevSimMs: number | null = null;
 
   start(): void {
     this.canvas = document.getElementById('sky') as HTMLCanvasElement;
@@ -333,6 +338,21 @@ export class App {
 
     // --- simulation time, sun & moon
     this.simDate = this.overrideDate ?? this.clock.tick(s);
+
+    // Advance the weather clock by simulated time. Continuous fast-forward
+    // (demo, 720x) is capped to a 40x timelapse; discontinuous jumps
+    // (slider scrubs) are applied in full so the cloud field changes too.
+    {
+      const simMs = this.simDate.getTime();
+      if (this.prevSimMs !== null) {
+        const dSim = (simMs - this.prevSimMs) / 1000;
+        const cap = 40 * Math.min(dtMs / 1000, 0.25);
+        this.cloudTimeSec +=
+          Math.abs(dSim) <= 60 ? Math.max(-cap, Math.min(cap, dSim)) : dSim;
+      }
+      this.prevSimMs = simMs;
+    }
+
     const sun = solarPosition(this.simDate, s.latDeg, s.lonDeg);
     const sunDir = dirFromAzEl(sun.azimuthDeg, sun.elevationDeg);
 
@@ -432,6 +452,7 @@ export class App {
 
     const params: RenderParams = {
       timeSec: tSec,
+      cloudTimeSec: this.cloudTimeSec,
       frame: this.frame++,
       camBasis,
       tanHalfFov: Math.tan((60 / 2) * RAD),
