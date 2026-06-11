@@ -1,5 +1,8 @@
 import { SkyRenderer, type RenderParams } from './gl/renderer';
 import { loadSkySource } from './atmosphere/lut';
+import { WeatherService } from './atmosphere/weather';
+import { AmbientAudio } from './ui/audio';
+import { WindowSync } from './sync';
 import { rayleighBeta, SUN_TINT, SUN_INTENSITY } from './atmosphere/constants';
 import { solarPosition, lstRad, twilightPhase, TWILIGHT_LABEL_JA } from './sun/solar';
 import { moonState, moonIrradianceFactor } from './sun/moon';
@@ -118,6 +121,13 @@ export class App {
   private clock = new SimClock();
   private wakeLock = new WakeLockManager();
   private quality = new QualityController();
+  private weather = new WeatherService();
+  private audio = new AmbientAudio();
+  private sync = new WindowSync();
+  /** Per-window view offset (?yaw=) for multi-monitor panoramas. */
+  private yawOffsetDeg = 0;
+  private sunriseCache: { key: string; ms: number | null } | null = null;
+  private wakeActive = false;
 
   private betaR = rayleighBeta();
   private sunIrradiance: [number, number, number] = [
@@ -165,6 +175,8 @@ export class App {
       onSettingsChanged: () => {
         saveSettings(this.settings);
         void this.wakeLock.setEnabled(this.settings.wakeLock);
+        this.audio.setVolume(this.settings.soundVol);
+        void this.audio.setEnabled(this.settings.soundOn);
       },
       onTimeModeChanged: (prev: TimeMode) => {
         if (this.settings.timeMode === 'demo' && prev !== 'demo') {
@@ -173,6 +185,7 @@ export class App {
       },
       requestGeolocation: () => this.requestGeolocation(),
       requestParallaxPermission: () => this.requestParallaxPermission(),
+      shareSky: () => this.shareSky(),
       toggleFullscreen: () => {
         if (document.fullscreenElement) void document.exitFullscreen();
         else void document.documentElement.requestFullscreen({ navigationUI: 'hide' });
@@ -191,12 +204,53 @@ export class App {
     this.resolveLocation();
     this.setupParallax();
 
-    // ?t=2026-06-29T12:00:00Z pins the simulation clock (testing/demos).
-    const tParam = new URLSearchParams(location.search).get('t');
-    if (tParam) {
-      const d = new Date(tParam);
-      if (!Number.isNaN(d.getTime())) this.overrideDate = d;
+    // URL params: ?t= pins the clock (sharing/tests), ?lat/?lon/?az/?pitch
+    // apply a shared sky, ?yaw= offsets this window's view (multi-monitor).
+    {
+      const q = new URLSearchParams(location.search);
+      const tParam = q.get('t');
+      if (tParam) {
+        const d = new Date(tParam);
+        if (!Number.isNaN(d.getTime())) this.overrideDate = d;
+      }
+      const lat = Number(q.get('lat'));
+      const lon = Number(q.get('lon'));
+      if (Number.isFinite(lat) && Number.isFinite(lon) && q.has('lat')) {
+        this.settings.latDeg = Math.max(-90, Math.min(90, lat));
+        this.settings.lonDeg = Math.max(-180, Math.min(180, lon));
+        this.settings.locationSource = 'manual';
+        this.settings.placeName = null;
+        this.settings.displayTz = null;
+        this.panel.refreshFromSettings();
+      }
+      const az = Number(q.get('az'));
+      if (Number.isFinite(az) && q.has('az')) {
+        this.settings.azimuthMode = 'manual';
+        this.settings.azimuthDeg = ((az % 360) + 360) % 360;
+      }
+      const pitch = Number(q.get('pitch'));
+      if (Number.isFinite(pitch) && q.has('pitch')) {
+        this.settings.pitchDeg = Math.max(10, Math.min(60, pitch));
+      }
+      const yaw = Number(q.get('yaw'));
+      if (Number.isFinite(yaw) && q.has('yaw')) this.yawOffsetDeg = yaw;
+      const ct = Number(q.get('ct')); // initial weather-clock seconds (tests)
+      if (Number.isFinite(ct) && q.has('ct')) this.cloudTimeSec = ct;
     }
+
+    // Other windows of this origin: follow their settings changes live and
+    // keep the shared clocks aligned (multi-monitor panoramas).
+    window.addEventListener('storage', () => {
+      Object.assign(this.settings, loadSettings());
+      this.panel.refreshFromSettings();
+      void this.wakeLock.setEnabled(this.settings.wakeLock);
+    });
+    this.sync.onState = (st) => {
+      this.cloudTimeSec = st.cloudTimeSec;
+      if (st.simMs !== null && this.settings.timeMode === 'demo') {
+        this.clock.syncDemoTo(new Date(st.simMs));
+      }
+    };
 
     // Optional precomputed multiple-scattering LUTs (Phase 2 artefacts).
     void loadSkySource().then((src) => {
@@ -238,6 +292,83 @@ export class App {
       const dg = Math.max(-20, Math.min(20, e.gamma - base.g));
       this.tiltTarget = [(dg / 20) * 1.4, (db / 20) * -1.0]; // deg: yaw, pitch
     });
+  }
+
+  // -------------------------------------------------------------- sharing
+  /** Build a URL that reproduces this very sky (place + instant + view). */
+  private async shareSky(): Promise<string> {
+    const s = this.settings;
+    const url = new URL(location.origin + location.pathname);
+    url.searchParams.set('lat', s.latDeg.toFixed(4));
+    url.searchParams.set('lon', s.lonDeg.toFixed(4));
+    url.searchParams.set('t', this.simDate.toISOString());
+    if (s.azimuthMode === 'manual') {
+      url.searchParams.set('az', String(Math.round(s.azimuthDeg)));
+    }
+    url.searchParams.set('pitch', String(Math.round(s.pitchDeg)));
+    const text = url.toString();
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: '空窓 soramado', url: text });
+        return '共有しました';
+      }
+      await navigator.clipboard.writeText(text);
+      return 'リンクをコピーしました';
+    } catch {
+      return text; // last resort: show the URL itself
+    }
+  }
+
+  // ------------------------------------------------------------- wake mode
+  /**
+   * The sunrise nearest to the wake instant at the viewed place (cached).
+   * Scanned around the wake time itself, so it works for any combination of
+   * device timezone and viewed location.
+   */
+  private sunriseMs(wakeMs: number, latDeg: number, lonDeg: number): number | null {
+    const key = `${Math.floor(wakeMs / 600_000)}|${latDeg.toFixed(2)}|${lonDeg.toFixed(2)}`;
+    if (this.sunriseCache?.key === key) return this.sunriseCache.ms;
+    let best: number | null = null;
+    const from = wakeMs - 26 * 3_600_000;
+    const to = wakeMs + 2 * 3_600_000;
+    let prev = solarPosition(new Date(from), latDeg, lonDeg).trueElevationDeg;
+    for (let t = from + 600_000; t <= to; t += 600_000) {
+      const e = solarPosition(new Date(t), latDeg, lonDeg).trueElevationDeg;
+      if (prev < -0.8 && e >= -0.8) {
+        const cross = t - 300_000;
+        if (best === null || Math.abs(cross - wakeMs) < Math.abs(best - wakeMs)) {
+          best = cross;
+        }
+      }
+      prev = e;
+    }
+    this.sunriseCache = { key, ms: best };
+    return best; // null on polar day/night
+  }
+
+  /**
+   * おはようモード: in the 30 min before wakeTime the window plays the dawn
+   * (40 min before sunrise to 40 min after), then holds bright morning for
+   * 30 min — a daylight alarm built from the physical sky.
+   */
+  private wakeVirtualDate(now: Date): Date | null {
+    const s = this.settings;
+    if (!s.wakeEnabled || s.timeMode !== 'real' || this.overrideDate) return null;
+    const [hh, mm] = s.wakeTime.split(':').map(Number);
+    if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+    const wake = new Date(now);
+    wake.setHours(hh, mm, 0, 0);
+    const t = now.getTime();
+    const startMs = wake.getTime() - 30 * 60_000;
+    const endMs = wake.getTime() + 30 * 60_000;
+    if (t < startMs || t > endMs) return null;
+    const sunrise = this.sunriseMs(wake.getTime(), s.latDeg, s.lonDeg);
+    if (sunrise === null) return null;
+    if (t <= wake.getTime()) {
+      const p = (t - startMs) / (30 * 60_000);
+      return new Date(sunrise + (-40 + 80 * p) * 60_000);
+    }
+    return new Date(sunrise + 40 * 60_000);
   }
 
   /** iOS 13+ requires a user-gesture permission for orientation events. */
@@ -338,6 +469,9 @@ export class App {
 
     // --- simulation time, sun & moon
     this.simDate = this.overrideDate ?? this.clock.tick(s);
+    const wakeVirtual = this.wakeVirtualDate(new Date());
+    this.wakeActive = wakeVirtual !== null;
+    if (wakeVirtual) this.simDate = wakeVirtual;
 
     // Advance the weather clock by simulated time. Continuous fast-forward
     // (demo, 720x) is capped to a 40x timelapse; discontinuous jumps
@@ -346,9 +480,13 @@ export class App {
       const simMs = this.simDate.getTime();
       if (this.prevSimMs !== null) {
         const dSim = (simMs - this.prevSimMs) / 1000;
-        const cap = 40 * Math.min(dtMs / 1000, 0.25);
+        const dWall = Math.min(dtMs / 1000, 0.25);
+        const cap = 40 * dWall;
+        // Never slower than real time (manual mode pins the clock but the
+        // wind must keep blowing), never faster than a 40x timelapse —
+        // except discontinuous scrubs, which reposition the sky in full.
         this.cloudTimeSec +=
-          Math.abs(dSim) <= 60 ? Math.max(-cap, Math.min(cap, dSim)) : dSim;
+          Math.abs(dSim) <= 60 ? Math.max(dWall, Math.min(cap, dSim)) : dSim;
       }
       this.prevSimMs = simMs;
     }
@@ -375,10 +513,54 @@ export class App {
       ? auroraZoneFactor(geomagneticLatitudeDeg(s.latDeg, s.lonDeg)) * auroraNight
       : 0;
 
+    // --- cloud coverage: live weather, or the manual slider + a diurnal
+    // convection model for the low cumulus.
+    const cloudsOn = s.cloudsMode !== 'off';
+    const diurnal = clamp01((sun.trueElevationDeg - 6) / 26); // convection
+    let cloudCovers: [number, number, number] = [
+      s.cloudCover * 0.75 * diurnal,
+      s.cloudCover * 0.85,
+      s.cloudCover,
+    ];
+    let synopticAmp = 0.45;
+    let visibility = 0.85;
+    let live = false;
+    if (s.cloudsMode === 'live') {
+      this.weather.update(s.latDeg, s.lonDeg);
+      const w = this.weather.sample(this.simDate, s.latDeg, s.lonDeg);
+      if (w) {
+        cloudCovers = [w.coverLow, w.coverMid, w.coverHigh];
+        synopticAmp = 0.15; // the data is the weather; noise only textures it
+        visibility = clamp01(w.visibility / 24_140);
+        live = true;
+      }
+    }
+
+    // --- occasional contrail (15-min slots, hash-scheduled)
+    const slot = Math.floor(this.cloudTimeSec / 900);
+    const hash = (n: number) => {
+      const x = Math.sin(n * 127.1 + 311.7) * 43758.5453;
+      return x - Math.floor(x);
+    };
+    const slotT = this.cloudTimeSec - slot * 900;
+    const contrailOn =
+      cloudsOn && s.contrails && hash(slot) < 0.38 && slotT > 5 && slotT < 780;
+    const heading = hash(slot + 2) * 2 * Math.PI;
+    const contrail: RenderParams['contrail'] = {
+      on: contrailOn,
+      origin: [hash(slot + 1) * 140 - 70, hash(slot + 3) * 140 - 70],
+      dir: [Math.cos(heading), Math.sin(heading)],
+      t: slotT,
+    };
+
     // --- view azimuth: keep the solar aureole out of frame by default
     const tSec = (now - this.startMs) / 1000;
     let yawDeg: number;
-    if (s.azimuthMode === 'manual') {
+    if (s.viewWalk) {
+      // 自動散歩: one slow full turn every 45 min, pitch breathing below.
+      yawDeg = ((tSec / 2700) * 360) % 360;
+      this.viewAzDeg = null;
+    } else if (s.azimuthMode === 'manual') {
       yawDeg = s.azimuthDeg;
       this.viewAzDeg = null;
     } else {
@@ -393,9 +575,12 @@ export class App {
       yawDeg = this.viewAzDeg;
     }
 
+    yawDeg += this.yawOffsetDeg;
+
     // --- micro drift: extremely slow view wander so the image is never a
     // perfect still (amplitude ≤0.2°, periods ≥ ~50 s: no motion sickness).
     let pitchDeg = s.pitchDeg;
+    if (s.viewWalk) pitchDeg += 10 * Math.sin((tSec / 780) * 2 * Math.PI);
     if (!this.reducedMotion) {
       yawDeg +=
         0.15 * Math.sin((tSec / 53) * 2 * Math.PI) +
@@ -463,8 +648,11 @@ export class App {
       samples: level.samples,
       lightSamples: level.light,
       sunDisc: s.sunDisc,
-      clouds: s.clouds,
-      cloudCover: s.cloudCover,
+      clouds: cloudsOn,
+      cloudCovers,
+      synopticAmp,
+      visibility,
+      contrail,
       haze: s.hazeOn,
       stars: s.stars,
       starMat,
@@ -478,18 +666,32 @@ export class App {
     };
     this.renderer.render(params);
 
-    // --- status & theme (2x per second)
+    // --- status, theme, ambience & window sync (2x per second)
     if (now - this.lastStatusMs > 500) {
       this.lastStatusMs = now;
       // The glass UI adapts to the sky: bright glass + dark ink in daylight.
       document.body.classList.toggle('theme-day', sun.trueElevationDeg > -3);
+      this.audio.updateEnvironment(
+        sun.trueElevationDeg,
+        Math.max(cloudCovers[0], cloudCovers[1], cloudCovers[2] * 0.5),
+        this.simDate,
+      );
+      this.sync.broadcast({
+        cloudTimeSec: this.cloudTimeSec,
+        simMs: s.timeMode === 'demo' ? this.simDate.getTime() : null,
+      });
       const [clockText, dateText] = this.formatClock(this.simDate, s.displayTz);
+      const engineLabel =
+        (this.renderer.usingLut ? '多重散乱LUT' : '単一散乱RT') +
+        (this.renderer.wideGamut ? ' · P3' : '') +
+        (live ? ' · 実況気象' : '') +
+        (this.wakeActive ? ' · ☀目覚まし' : '');
       this.panel.setStatus({
         clockText,
         dateText,
         sunElevDeg: sun.elevationDeg,
         twilightLabel: TWILIGHT_LABEL_JA[twilightPhase(sun.trueElevationDeg)],
-        engineLabel: this.renderer.usingLut ? '多重散乱LUT' : '単一散乱RT',
+        engineLabel,
         locationLabel: this.locationLabel(),
         fps: this.fpsEma,
       });
