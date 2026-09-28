@@ -1,7 +1,14 @@
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
+// Short commit id shown in the settings panel so a device report can be
+// tied to an exact deploy (Cloudflare Pages sets CF_PAGES_COMMIT_SHA).
+const buildId = (process.env.CF_PAGES_COMMIT_SHA ?? 'local').slice(0, 7);
+
 export default defineConfig({
+  define: {
+    __BUILD_ID__: JSON.stringify(buildId),
+  },
   build: {
     target: 'es2020',
     sourcemap: false,

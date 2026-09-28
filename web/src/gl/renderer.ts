@@ -266,6 +266,35 @@ export class SkyRenderer {
     gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
   }
 
+  /**
+   * Average display colour (0-255 RGB) of a small strip at the top and the
+   * bottom centre of the last frame. Call right after render(), in the same
+   * frame: the drawing buffer is not preserved past compositing.
+   */
+  sampleEdgeColors(): { top: [number, number, number]; bottom: [number, number, number] } | null {
+    const gl = this.gl;
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    if (w < 4 || h < 4) return null;
+    const sw = Math.min(32, w);
+    const sh = 2;
+    const x = Math.floor((w - sw) / 2);
+    const buf = new Uint8Array(sw * sh * 4);
+    const avg = (y: number): [number, number, number] => {
+      gl.readPixels(x, y, sw, sh, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+      let r = 0, g = 0, b = 0;
+      for (let i = 0; i < buf.length; i += 4) {
+        r += buf[i];
+        g += buf[i + 1];
+        b += buf[i + 2];
+      }
+      const n = buf.length / 4;
+      return [Math.round(r / n), Math.round(g / n), Math.round(b / n)];
+    };
+    // WebGL's origin is bottom-left.
+    return { bottom: avg(0), top: avg(h - sh) };
+  }
+
   get usingLut(): boolean {
     return this.lut !== null && this.programs.lut !== null;
   }

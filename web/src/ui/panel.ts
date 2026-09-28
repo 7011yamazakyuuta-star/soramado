@@ -1,5 +1,6 @@
 import type { Settings, TimeMode, QualityMode, AzimuthMode, CloudsMode } from '../settings';
 import { CITY_PRESETS } from '../sky/cities';
+import { isIOS, isStandaloneApp } from '../platform';
 
 export interface PanelHooks {
   /** Persist settings and apply side effects (wake lock, etc.). */
@@ -24,6 +25,8 @@ export interface StatusInfo {
   /** e.g. 推定: Asia/Tokyo, 現在地, 手動 */
   locationLabel: string;
   fps: number;
+  /** Build id and (iOS app) viewport measurement, for support reports. */
+  diagText?: string;
 }
 
 const SHOW_MS = 3000;
@@ -178,6 +181,7 @@ export class Panel {
         </div>
         <div class="divider"></div>
         <div class="meta" data-el="meta">—</div>
+        <div class="meta" data-el="diag"></div>
       </div>
     `;
 
@@ -193,14 +197,17 @@ export class Panel {
 
     // --- fullscreen
     const fsBtn = this.els.fsBtn;
-    // typeof check: the lib.dom type is non-optional but iPhone Safari
-    // really does not implement element fullscreen.
-    if (typeof document.documentElement.requestFullscreen === 'function') {
+    const standalone = isStandaloneApp();
+    // Pointless in the installed app (already chromeless) and where the API
+    // is missing (typeof check: lib.dom types it as always present, but
+    // iPhone Safari does not implement element fullscreen).
+    if (!standalone && typeof document.documentElement.requestFullscreen === 'function') {
       fsBtn.addEventListener('click', () => this.hooks.toggleFullscreen());
     } else {
-      fsBtn.hidden = true; // iPhone Safari has no element fullscreen API
+      fsBtn.hidden = true;
     }
-    if (/iPhone|iPad|iPod/.test(navigator.userAgent)) {
+    // "Add to Home Screen" hint: only useful in the Safari tab, not the app.
+    if (isIOS() && !standalone) {
       this.els.iosHint.hidden = false;
     }
 
@@ -430,6 +437,7 @@ export class Panel {
     this.els.meta.textContent =
       `${info.dateText}  太陽高度 ${info.sunElevDeg >= 0 ? '+' : ''}${info.sunElevDeg.toFixed(1)}°` +
       `  |  ${info.locationLabel}  |  ${info.engineLabel}  ${info.fps | 0} fps`;
+    this.els.diag.textContent = info.diagText ?? '';
   }
 
   // ------------------------------------------------------ auto-hide logic
