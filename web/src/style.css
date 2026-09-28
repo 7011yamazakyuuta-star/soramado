@@ -53,17 +53,14 @@ body {
 }
 
 #sky {
-  /* inset:0 stretches to the layout viewport; the extra safe-area-inset
-     height guarantees coverage under the iOS home indicator even in
-     standalone PWAs where the viewport stops short (overdraw is clipped
-     by the body and completely harmless). */
+  /* Exactly the viewport. (A fixed overdraw would push the horizon off the
+     bottom of the screen on every correctly laid-out device; the iOS
+     standalone shortfall is measured and corrected precisely in JS.) */
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
   width: 100%;
-  height: calc(100% + env(safe-area-inset-bottom, 0px));
-  /* Large-viewport unit where supported: full screen even while browser
-     chrome or the iOS home indicator carve up the small viewport. */
-  height: calc(100lvh + env(safe-area-inset-bottom, 0px));
+  height: 100%;
   display: block;
   background: #03060c;
 }
@@ -72,8 +69,10 @@ body.idle-cursor {
   cursor: none;
 }
 
-#fallback[hidden] {
-  display: none;
+/* Author display rules (.iconbtn grid, .toggle inline-flex, ...) would
+   otherwise override the UA's [hidden] rule and keep "hidden" UI visible. */
+[hidden] {
+  display: none !important;
 }
 
 #fallback {

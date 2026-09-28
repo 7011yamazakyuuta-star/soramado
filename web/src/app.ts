@@ -1,6 +1,7 @@
 import { SkyRenderer, type RenderParams } from './gl/renderer';
 import { loadSkySource } from './atmosphere/lut';
 import { getStarCatalog } from './sky/catalog';
+import { isIOS, isStandaloneApp } from './platform';
 import { WeatherService } from './atmosphere/weather';
 import { AmbientAudio } from './ui/audio';
 import { WindowSync } from './sync';
@@ -161,6 +162,10 @@ export class App {
    *  pattern streams instead of strobing. */
   private cloudTimeSec = 0;
   private prevSimMs: number | null = null;
+  /** iOS app viewport measurement (settings panel), for device reports. */
+  private iosAppDiag: (() => string) | null = null;
+  private themeMeta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+  private lastPageColorMs = -Infinity;
 
   start(): void {
     this.canvas = document.getElementById('sky') as HTMLCanvasElement;
@@ -268,31 +273,79 @@ export class App {
 
   // -------------------------------------------------- iOS viewport rescue
   /**
-   * iOS standalone PWAs can lay out a portrait viewport that stops short of
-   * the home-indicator region, leaving a black band no CSS unit reliably
-   * covers. Measure the physical screen and force the canvas over it
-   * (overdraw below the screen edge is clipped and harmless).
+   * iOS home-screen apps with the translucent status bar draw the page up
+   * under the status bar but, in portrait, size the viewport as if the bar
+   * still took space: the page ends one status-bar height (~47-62 pt) short
+   * of the bottom edge. Landscape hides the status bar, so it is fine there.
+   * Measure the physical screen and stretch the canvas over the shortfall.
    */
   private fixStandaloneViewport(): void {
-    if (!/iPhone|iPad|iPod/.test(navigator.userAgent)) return;
-    const standalone =
-      matchMedia('(display-mode: standalone)').matches ||
-      (navigator as unknown as { standalone?: boolean }).standalone === true;
-    if (!standalone) return;
-    const apply = () => {
-      const portrait = matchMedia('(orientation: portrait)').matches;
-      const target = portrait
+    if (!isIOS() || !isStandaloneApp()) return;
+    let fixed = false;
+    const screenH = () =>
+      window.innerHeight >= window.innerWidth
         ? Math.max(screen.width, screen.height)
         : Math.min(screen.width, screen.height);
-      if (this.canvas.clientHeight < target - 1) {
-        this.canvas.style.height = `${target}px`;
-      } else {
-        this.canvas.style.removeProperty('height');
-      }
+    const apply = () => {
+      // Always measure the CSS-only height first: the previous version
+      // compared against its own correction and removed it on the next
+      // resize event, which iOS fires right after launch.
+      this.canvas.style.removeProperty('height');
+      const target = screenH();
+      const h = this.canvas.getBoundingClientRect().height;
+      fixed = h < target - 1;
+      if (fixed) this.canvas.style.height = `${target}px`;
+    };
+
+    // Live measurement for the settings panel. With a device screenshot it
+    // tells the three possible causes apart: a short page viewport (fixed
+    // by the stretch above), a short native web view (not reachable from
+    // the page), or an offset fixed layer (viewport equals the screen).
+    const probe = document.createElement('div');
+    probe.style.cssText =
+      'position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;pointer-events:none;' +
+      'padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)';
+    document.body.appendChild(probe);
+    this.iosAppDiag = () => {
+      const cs = getComputedStyle(probe);
+      const r = this.canvas.getBoundingClientRect();
+      const vv = window.visualViewport;
+      return (
+        `表示 ${Math.round(vv?.height ?? window.innerHeight)} / 画面 ${screenH()}` +
+        ` / 余白 上${Math.round(parseFloat(cs.paddingTop))} 下${Math.round(parseFloat(cs.paddingBottom))}` +
+        ` / 空 ${Math.round(r.top)}–${Math.round(r.bottom)}` +
+        (fixed ? ' / 補正中' : '')
+      );
     };
     apply();
-    window.addEventListener('resize', () => window.setTimeout(apply, 60));
-    window.addEventListener('orientationchange', () => window.setTimeout(apply, 200));
+    window.addEventListener('resize', () => window.setTimeout(apply, 80));
+    window.addEventListener('orientationchange', () => window.setTimeout(apply, 250));
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') window.setTimeout(apply, 250);
+    });
+    // The standalone viewport keeps settling for a moment after launch.
+    window.setTimeout(apply, 600);
+    window.setTimeout(apply, 2000);
+  }
+
+  /**
+   * Paint the page background (and the browser/status-bar tint) with the
+   * live sky colours, so any strip the canvas cannot reach — an iOS layout
+   * shortfall, a notch area, the rubber-band overscroll — shows the sky's
+   * own horizon colour instead of a black band.
+   */
+  private syncPageColors(): void {
+    const c = this.renderer.sampleEdgeColors();
+    if (!c) return;
+    const css = ([r, g, b]: [number, number, number]) =>
+      this.renderer.wideGamut
+        ? `color(display-p3 ${(r / 255).toFixed(3)} ${(g / 255).toFixed(3)} ${(b / 255).toFixed(3)})`
+        : `rgb(${r}, ${g}, ${b})`;
+    const bottom = css(c.bottom);
+    document.documentElement.style.backgroundColor = bottom;
+    document.body.style.backgroundColor = bottom;
+    const hex = '#' + c.top.map((v) => v.toString(16).padStart(2, '0')).join('');
+    this.themeMeta?.setAttribute('content', hex);
   }
 
   // ------------------------------------------------------------ location
@@ -701,6 +754,13 @@ export class App {
     };
     this.renderer.render(params);
 
+    // Page/status-bar colours follow the sky. Must run right after drawing
+    // (same frame) so the drawing buffer is still readable.
+    if (now - this.lastPageColorMs > 1500) {
+      this.lastPageColorMs = now;
+      this.syncPageColors();
+    }
+
     // --- status, theme, ambience & window sync (2x per second)
     if (now - this.lastStatusMs > 500) {
       this.lastStatusMs = now;
@@ -721,6 +781,8 @@ export class App {
         (this.renderer.wideGamut ? ' · P3' : '') +
         (live ? ' · 実況気象' : '') +
         (this.wakeActive ? ' · ☀目覚まし' : '');
+      const diagText =
+        `build ${__BUILD_ID__}` + (this.iosAppDiag ? `  |  ${this.iosAppDiag()}` : '');
       this.panel.setStatus({
         clockText,
         dateText,
@@ -729,6 +791,7 @@ export class App {
         engineLabel,
         locationLabel: this.locationLabel(),
         fps: this.fpsEma,
+        diagText,
       });
     }
 
