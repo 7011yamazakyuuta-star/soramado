@@ -1,6 +1,8 @@
-// Catalogue star points: equatorial direction + magnitude per vertex.
+// Catalogue star points: equatorial direction, magnitude and true colour
+// (from the Hipparcos B-V index) per vertex.
 in vec3 aEqDir;
 in float aMag;
+in vec3 aTint;
 
 uniform mat3 uStarMat;     // world -> sky-fixed equatorial (orthonormal)
 uniform mat3 uCamBasis;    // columns: right, up, forward
@@ -10,8 +12,10 @@ uniform vec3 uBetaR;
 
 out float vRadiance;
 out vec3 vExtinction;
+out vec3 vTint;
 out float vSeed;
 out float vTwAmp;
+out float vAirmass;
 
 void main() {
   // transpose(uStarMat) * eq == eq * uStarMat: equatorial -> world.
@@ -22,8 +26,10 @@ void main() {
     gl_PointSize = 0.0;
     vRadiance = 0.0;
     vExtinction = vec3(0.0);
+    vTint = vec3(0.0);
     vSeed = 0.0;
     vTwAmp = 0.0;
+    vAirmass = 1.0;
     return;
   }
   float aspect = uResolution.x / uResolution.y;
@@ -35,6 +41,7 @@ void main() {
   // Pogson's law: radiance ratio 10^(-0.4 m), anchored to the procedural
   // field's brightest-star level.
   vRadiance = 3.4e-4 * pow(10.0, -0.4 * aMag);
+  vTint = aTint;
 
   // Atmospheric extinction (Kasten-Young air mass): stars dim AND redden
   // toward the horizon, exactly like the real thing.
@@ -44,9 +51,10 @@ void main() {
   vec3 tauV = uBetaR * 8500.0 + vec3(4.44e-6 * 1200.0) +
               vec3(0.650e-6, 1.881e-6, 0.085e-6) * 15000.0;
   vExtinction = exp(-tauV * am);
+  vAirmass = am;
 
   // Scintillation grows with air mass (turbulent path length).
-  vTwAmp = clamp(0.06 + 0.05 * am, 0.06, 0.45);
+  vTwAmp = clamp(0.05 + 0.055 * am, 0.05, 0.5);
   vSeed = fract(aEqDir.x * 137.31 + aEqDir.z * 71.7) * 6.2831 + aMag;
 
   float px = uResolution.y / 540.0;
