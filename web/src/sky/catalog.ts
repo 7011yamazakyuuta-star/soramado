@@ -1,5 +1,5 @@
 /**
- * Full naked-eye star catalogue: Hipparcos-2 stars with real B-V colour
+ * Full naked-eye star catalogue: 8,948 Hipparcos-2 stars (mag <= 6.6) with real B-V colour
  * indices, decoded from an embedded binary ('SORB' + u32 count + quantised
  * records). The 116 built-in bright stars remain as a decode-failure
  * fallback.

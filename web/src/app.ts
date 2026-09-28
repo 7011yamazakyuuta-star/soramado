@@ -1,5 +1,6 @@
 import { SkyRenderer, type RenderParams } from './gl/renderer';
 import { loadSkySource } from './atmosphere/lut';
+import { getStarCatalog } from './sky/catalog';
 import { WeatherService } from './atmosphere/weather';
 import { AmbientAudio } from './ui/audio';
 import { WindowSync } from './sync';
@@ -256,8 +257,42 @@ export class App {
     void loadSkySource().then((src) => {
       if (src.kind === 'lut-multi') this.renderer.setLut(src.lut);
     });
+    // Real Hipparcos catalogue with true star colours; the 116 built-in
+    // bright stars remain if decoding ever fails.
+    const cat = getStarCatalog();
+    if (cat) this.renderer.setStarCatalog(cat.data, cat.count);
+    this.fixStandaloneViewport();
 
     requestAnimationFrame(this.loop);
+  }
+
+  // -------------------------------------------------- iOS viewport rescue
+  /**
+   * iOS standalone PWAs can lay out a portrait viewport that stops short of
+   * the home-indicator region, leaving a black band no CSS unit reliably
+   * covers. Measure the physical screen and force the canvas over it
+   * (overdraw below the screen edge is clipped and harmless).
+   */
+  private fixStandaloneViewport(): void {
+    if (!/iPhone|iPad|iPod/.test(navigator.userAgent)) return;
+    const standalone =
+      matchMedia('(display-mode: standalone)').matches ||
+      (navigator as unknown as { standalone?: boolean }).standalone === true;
+    if (!standalone) return;
+    const apply = () => {
+      const portrait = matchMedia('(orientation: portrait)').matches;
+      const target = portrait
+        ? Math.max(screen.width, screen.height)
+        : Math.min(screen.width, screen.height);
+      if (this.canvas.clientHeight < target - 1) {
+        this.canvas.style.height = `${target}px`;
+      } else {
+        this.canvas.style.removeProperty('height');
+      }
+    };
+    apply();
+    window.addEventListener('resize', () => window.setTimeout(apply, 60));
+    window.addEventListener('orientationchange', () => window.setTimeout(apply, 200));
   }
 
   // ------------------------------------------------------------ location

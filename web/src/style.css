@@ -61,6 +61,9 @@ body {
   inset: 0;
   width: 100%;
   height: calc(100% + env(safe-area-inset-bottom, 0px));
+  /* Large-viewport unit where supported: full screen even while browser
+     chrome or the iOS home indicator carve up the small viewport. */
+  height: calc(100lvh + env(safe-area-inset-bottom, 0px));
   display: block;
   background: #03060c;
 }

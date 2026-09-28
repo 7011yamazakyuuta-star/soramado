@@ -299,15 +299,19 @@ vec3 starField(vec3 dirEq, float elevY) {
   vec3 p = dirEq * kCells;
   vec3 cell = floor(p);
   vec3 rnd = hash33(cell);
-  if (rnd.x > 0.18) return vec3(0.0);
+  // Real star counts climb steeply toward the galactic plane: weight the
+  // sub-catalogue filler density by galactic latitude.
+  float sinGb = dot(dirEq, vec3(-0.8677, 0.1981, 0.4560));
+  float density = 0.06 + 0.20 * exp(-(sinGb * sinGb) / 0.10);
+  if (rnd.x > density) return vec3(0.0);
 
   vec3 starDir = normalize(cell + 0.5 + (rnd - 0.5));
   float d = distance(dirEq, starDir);
 
-  // Faint background population only — the bright anchors come from the
-  // real star catalogue rendered as a separate point pass.
+  // Sub-visual filler only — the real Hipparcos stars (point pass) carry
+  // the sky; this population just adds the below-catalogue "grain".
   float u = hash13(cell + 17.0);
-  float brightness = 0.02 + 0.5 * pow(u, 16.0);
+  float brightness = 0.015 + 0.28 * pow(u, 16.0);
 
   // Sharp point spread (~0.9 px sigma, resolution-aware).
   float pxAngle = uTanHalfFov * 2.0 / uResolution.y;
@@ -328,25 +332,74 @@ vec3 starField(vec3 dirEq, float elevY) {
 }
 
 // The Milky Way: our own galaxy's disc as a patchy band of unresolved
-// starlight with a brighter bulge toward Sagittarius and dark dust rifts.
-// Evaluated in the sky-fixed equatorial frame -> it rises, crosses and
-// sets with the real sidereal motion, exactly where it should be.
+// starlight — wider, brighter and warmer toward the Sagittarius bulge,
+// thinner and cooler toward the anticentre, cut by the Great Rift dust
+// lanes. Evaluated in the sky-fixed equatorial frame -> it rises, crosses
+// and sets with the real sidereal motion, exactly where it should be.
 vec3 milkyWay(vec3 dirEq) {
-  // J2000 unit vectors: north galactic pole and galactic centre.
-  const vec3 gp = vec3(-0.8677, -0.1981, 0.4560);
-  const vec3 gc = vec3(-0.0548, -0.8734, -0.4839);
+  // J2000 unit vectors of the north galactic pole and galactic centre,
+  // expressed in this app's equatorial frame (y = -cos(dec) sin(ra)).
+  const vec3 gp = vec3(-0.8677, 0.1981, 0.4560);
+  const vec3 gc = vec3(-0.0548, 0.8734, -0.4839);
   vec3 gy = cross(gp, gc);
   float sb = clamp(dot(dirEq, gp), -1.0, 1.0); // sin(galactic latitude)
   float b = asin(sb);
   float l = atan(dot(dirEq, gy), dot(dirEq, gc));
 
-  float band = exp(-(b * b) / (2.0 * 0.21 * 0.21)); // sigma ~12 deg
-  float bulge = 0.55 + 0.85 * exp(-(l * l) / (2.0 * 1.1 * 1.1));
+  float toBulge = exp(-(l * l) / (2.0 * 1.0 * 1.0));
+  float sigma = 0.15 + 0.11 * toBulge; // the band widens toward the bulge
+  float band = exp(-(b * b) / (2.0 * sigma * sigma));
+  float bulge = 0.5 + 1.0 * toBulge;
   float pat = fbm3lo(vec3(l * 2.6, b * 8.0, 3.7));
+  float pat2 = fbm3lo(vec3(l * 6.5 + 4.0, b * 18.0, 9.3)); // star clouds
   float rift = smoothstep(0.25, 0.62, fbm3lo(vec3(l * 4.2 + 9.0, b * 13.0, 7.7))) *
                smoothstep(0.18, 0.02, abs(b));
-  float bright = band * bulge * (0.5 + 0.9 * pat) * (1.0 - 0.55 * rift);
-  return vec3(1.0, 0.96, 0.90) * 8.5e-6 * bright;
+  float rift2 = smoothstep(0.35, 0.7, fbm3lo(vec3(l * 9.0 + 2.0, b * 22.0, 5.1))) *
+                smoothstep(0.12, 0.01, abs(b));
+  float bright = band * bulge * (0.45 + 0.65 * pat + 0.35 * pat2) *
+                 (1.0 - 0.55 * rift) * (1.0 - 0.35 * rift2);
+  vec3 tint = mix(vec3(0.92, 0.95, 1.0), vec3(1.05, 0.97, 0.85), toBulge);
+  return tint * 9.5e-6 * bright;
+}
+
+// The deep-sky objects a dark-adapted naked eye actually sees, as soft
+// glows at their true J2000 positions (app frame): the Pleiades, the Orion
+// Nebula, Andromeda, the Double Cluster, Eta Carinae, Omega Centauri and
+// both Magellanic Clouds for southern observers.
+vec3 deepSky(vec3 d) {
+  vec3 s = vec3(0.0);
+  float a2;
+  a2 = 2.0 * (1.0 - dot(d, vec3(0.500, -0.764, 0.409)));   // M45 Pleiades
+  s += vec3(0.80, 0.88, 1.0) * 3.0e-6 * exp(-a2 / 4.0e-4);
+  a2 = 2.0 * (1.0 - dot(d, vec3(0.107, -0.990, -0.094)));  // M42 Orion
+  s += vec3(1.0, 0.84, 0.88) * 4.0e-6 * exp(-a2 / 1.4e-4);
+  a2 = 2.0 * (1.0 - dot(d, vec3(0.739, -0.139, 0.660)));   // M31 Andromeda
+  s += vec3(0.96, 0.94, 0.90) * 2.6e-6 * exp(-a2 / 7.0e-4);
+  a2 = 2.0 * (1.0 - dot(d, vec3(0.441, -0.316, 0.840)));   // Double Cluster
+  s += vec3(0.92, 0.94, 1.0) * 2.2e-6 * exp(-a2 / 1.2e-4);
+  a2 = 2.0 * (1.0 - dot(d, vec3(-0.475, -0.161, -0.865))); // Eta Carinae
+  s += vec3(1.0, 0.9, 0.85) * 3.0e-6 * exp(-a2 / 6.0e-4);
+  a2 = 2.0 * (1.0 - dot(d, vec3(-0.628, 0.250, -0.737)));  // Omega Centauri
+  s += vec3(0.95, 0.95, 0.92) * 2.4e-6 * exp(-a2 / 1.0e-4);
+  a2 = 2.0 * (1.0 - dot(d, vec3(0.055, -0.342, -0.938)));  // LMC
+  s += vec3(0.95, 0.95, 1.0) * 6.0e-6 * exp(-a2 / 4.0e-3) *
+       (0.6 + 0.6 * fbm3lo(d * 40.0 + 3.0));
+  a2 = 2.0 * (1.0 - dot(d, vec3(0.287, -0.067, -0.955)));  // SMC
+  s += vec3(0.94, 0.95, 1.0) * 4.0e-6 * exp(-a2 / 1.6e-3);
+  return s;
+}
+
+// Zodiacal light: sunlight scattered by interplanetary dust in the
+// ecliptic plane — the faint cone rising from the horizon after dusk and
+// before dawn. Empirical brightness law in elongation and ecliptic latitude.
+vec3 zodiacalLight(vec3 dirEq, vec3 sunEq) {
+  const vec3 eclPole = vec3(0.0, 0.3977, 0.9175); // J2000, app frame
+  float beta = asin(clamp(dot(dirEq, eclPole), -1.0, 1.0));
+  float eps = acos(clamp(dot(dirEq, sunEq), -1.0, 1.0));
+  float e = max(eps, 0.35);
+  float wBeta = 0.10 + 0.13 * e;
+  float bright = pow(0.35 / e, 2.3) * exp(-(beta * beta) / (wBeta * wBeta));
+  return vec3(1.0, 0.96, 0.88) * 7.0e-6 * bright;
 }
 
 // Airglow: faint emission layer at ~87 km; van Rhijn brightening toward the
@@ -615,7 +668,9 @@ void main() {
   // ----- celestial additions, attenuated by the atmosphere
   if (uStarsOn > 0.5) {
     vec3 dirEq = uStarMat * rd;
-    sky += (starField(dirEq, rd.y) + milkyWay(dirEq)) * viewTrans;
+    vec3 sunEq = uStarMat * sunDir;
+    sky += (starField(dirEq, rd.y) + milkyWay(dirEq) + deepSky(dirEq) +
+            zodiacalLight(dirEq, sunEq)) * viewTrans;
   }
   sky += (airglow(rd) + aurora(ro, rd)) * viewTrans;
 
@@ -651,6 +706,13 @@ void main() {
         sky = mix(sky, Lm * viewTrans + atmos, edge);
       }
     }
+    // Veiling-glare halo around the bright disc (eye/optics), scaled by the
+    // illuminated fraction so a thin crescent barely glows.
+    float ang = acos(clamp(cosV, -1.0, 1.0));
+    float illum = 0.5 * (1.0 - dot(sunDir, uMoonDir));
+    float glare = exp(-pow(ang / 0.05, 1.5));
+    sky += uSunIrradiance * (0.12 / PI) * 0.06 * glare * illum *
+           min(1.0, 1.7 / max(uExposure, 1e-3)) * viewTrans;
   }
 
   // Solar disc (off by default: the sky must not reveal a light source).

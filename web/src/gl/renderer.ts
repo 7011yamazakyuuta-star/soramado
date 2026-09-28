@@ -99,9 +99,18 @@ export class SkyRenderer {
   private vao: WebGLVertexArrayObject;
   private starProgram: ProgramInfo;
   private starVao: WebGLVertexArrayObject;
+  private starBuf: WebGLBuffer;
   private starCount: number;
   /** True when rendering into a Display-P3 drawing buffer. */
   wideGamut = false;
+
+  /** Swap in the full star catalogue (interleaved x,y,z,mag,r,g,b). */
+  setStarCatalog(data: Float32Array, count: number): void {
+    const gl = this.gl;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.starBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    this.starCount = count;
+  }
 
   constructor(private canvas: HTMLCanvasElement) {
     const gl = canvas.getContext('webgl2', {
@@ -149,29 +158,42 @@ export class SkyRenderer {
     // Sky-fixed equatorial frame convention (matches uStarMat, verified):
     // eqDir = (cos d cos a, -cos d sin a, sin d) for RA a, Dec d.
     const RAD = Math.PI / 180;
+    // Built-in bright stars (white) until the full catalogue is installed.
     this.starCount = BRIGHT_STARS.length;
-    const starData = new Float32Array(this.starCount * 4);
+    const starData = new Float32Array(this.starCount * 7);
     BRIGHT_STARS.forEach(([raDeg, decDeg, mag], i) => {
       const ra = raDeg * RAD;
       const dec = decDeg * RAD;
-      starData[i * 4 + 0] = Math.cos(dec) * Math.cos(ra);
-      starData[i * 4 + 1] = -Math.cos(dec) * Math.sin(ra);
-      starData[i * 4 + 2] = Math.sin(dec);
-      starData[i * 4 + 3] = mag;
+      starData.set(
+        [
+          Math.cos(dec) * Math.cos(ra),
+          -Math.cos(dec) * Math.sin(ra),
+          Math.sin(dec),
+          mag,
+          1,
+          1,
+          1,
+        ],
+        i * 7,
+      );
     });
     const starVao = gl.createVertexArray();
     const starBuf = gl.createBuffer();
     if (!starVao || !starBuf) throw new Error('star buffer alloc failed');
     this.starVao = starVao;
+    this.starBuf = starBuf;
     gl.bindVertexArray(starVao);
     gl.bindBuffer(gl.ARRAY_BUFFER, starBuf);
     gl.bufferData(gl.ARRAY_BUFFER, starData, gl.STATIC_DRAW);
     const aEqDir = gl.getAttribLocation(starProg, 'aEqDir');
     const aMag = gl.getAttribLocation(starProg, 'aMag');
+    const aTint = gl.getAttribLocation(starProg, 'aTint');
     gl.enableVertexAttribArray(aEqDir);
-    gl.vertexAttribPointer(aEqDir, 3, gl.FLOAT, false, 16, 0);
+    gl.vertexAttribPointer(aEqDir, 3, gl.FLOAT, false, 28, 0);
     gl.enableVertexAttribArray(aMag);
-    gl.vertexAttribPointer(aMag, 1, gl.FLOAT, false, 16, 12);
+    gl.vertexAttribPointer(aMag, 1, gl.FLOAT, false, 28, 12);
+    gl.enableVertexAttribArray(aTint);
+    gl.vertexAttribPointer(aTint, 3, gl.FLOAT, false, 28, 16);
     gl.bindVertexArray(null);
 
     // Blue-noise dither mask (generated procedurally, cached).
